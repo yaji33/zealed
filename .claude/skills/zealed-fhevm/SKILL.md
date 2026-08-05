@@ -1,0 +1,175 @@
+---
+name: zealed-fhevm
+description: Build, test, and deploy Zealed's confidential prize-savings contracts on the Zama Protocol (fhEVM). Use this skill whenever writing or reviewing Solidity that touches encrypted types (euint/ebool/eaddress), ACL grants, encrypted inputs, decryption flows, the pull-based draw pattern, or Hardhat tests/deploy scripts for this repo. Load this skill for any file under packages/contracts/.
+---
+
+# Zealed fhEVM Skill
+
+This is the project-specific skill for Zealed (confidential PoolTogether, Zama Season 4 bounty). It assumes the agent already has general Solidity competence and focuses on what's specific to fhEVM and to this repo's architecture. Reference `build-brief.md` and `CLAUDE.md` at the repo root for product/architecture context — this file is the technical API layer underneath those.
+
+**Companion skills, install these too:** this file does not duplicate the full generic fhEVM API reference. Two community-built skills from prior Zama Developer Program bounty seasons already cover that ground in depth and are designed to be dropped into an agent's context:
+
+```
+npx skills add 0xE1337/fhevm-skill
+npx skills add Makabeez/fhevm-skill
+```
+
+Both were built specifically as agent-facing FHEVM references (Season 2/3 bounty submissions) with worked examples, anti-pattern catalogs, and static linters. See `references/prior-art.md` in this repo for what each one contains and where they overlap. Use them for general fhEVM syntax questions; use this file for anything Zealed-specific.
+
+## Maintenance Protocol — this file is a living document
+
+This skill grows with the build. It should not stay static from Week 1 to submission. After any module ships (vault, ticket engine, draw manager, claim flow, frontend integration), whoever ships it — agent or Jay — does two things before moving on:
+
+1. **Append an entry to the Build Log (Section 8, bottom of this file).** One short block: what shipped, what was learned, date/milestone. Keep it terse, this is a log, not a report.
+2. **Promote durable rules into the numbered sections above.** If something discovered while building is a rule that should bind *future* code (not just describe what happened), it doesn't just live in the log — it gets folded into Section 1–6 as an actual constraint, the way the silent-zero-on-encrypted-branch rule and the `setOperator` deposit note were folded into Sections 3 and 5 after the vault shipped. The log is the audit trail of when and why; the numbered sections are the enforced current state.
+
+Keep `.cursor/rules/fhevm-contracts.mdc` in sync with the numbered sections (1–6) only — that file stays lean and scoped per Cursor's context-budget conventions, so the Build Log does not get mirrored there. Cursor gets the current rules, this file gets the current rules plus the history of how they were arrived at.
+
+## 0 — Version currency warning (check this first)
+
+fhEVM has moved fast. As of this writing, **FHEVM v0.9 shifted decryption from an Oracle/gateway-callback model to a self-relaying model**: the client performs off-chain decryption via `@zama-fhe/relayer-sdk` and re-submits with `FHE.verifySignatures()`, rather than the contract receiving a `requestDecryption(...) → onlyGateway callback` round trip.
+
+Some public FHEVM examples, including some agent-skill packages, still document the older callback pattern. Before implementing any decryption flow in this repo:
+
+1. Check the installed `@fhevm/solidity` and `@fhevm/hardhat-plugin` versions in `package.json`.
+2. Check `docs.zama.org/protocol/solidity-guides` for the migration guide matching that version.
+3. If in doubt, prefer the self-relaying / `verifySignatures` pattern — it's the direction the protocol is moving, and it's the one that will still be current when this ships to Sepolia in September.
+
+This matters most for Zealed's `checkIfWon()` and prize-claim flow, both of which are decryption-adjacent.
+
+## 1 — Encrypted Types
+
+| Type | Plaintext equivalent | Use in Zealed |
+|---|---|---|
+| `ebool` | `bool` | draw-result flags, `canWithdraw` checks |
+| `euint64` | `uint64` | balances, TWAB, ticket weights, prize amounts — default choice |
+| `euint128` / `euint256` | wider ints | avoid unless a value genuinely needs more range than `euint64`; costs more per operation |
+| `eaddress` | `address` | only if we ever need to encrypt a recipient address; not currently needed |
+| `externalEuintXX` / `externalEbool` | — | input-only wrapper types, function parameters, **never store these** |
+
+Rule: default to `euint64` for every amount in this contract set (balances, TWAB, ticket ranges, prize amounts). Only widen if a specific calculation can overflow it, and document why.
+
+## 2 — Required Contract Skeleton
+
+Every contract in `packages/contracts/contracts/` follows this shape:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { FHE, euint64, ebool, externalEuint64 } from "@fhevm/solidity/lib/FHE.sol";
+import { SepoliaConfig } from "@fhevm/solidity/config/ZamaConfig.sol"; // Sepolia only, per build-brief.md
+
+contract SomeZealedContract is SepoliaConfig {
+    // encrypted state only ever stores euintXX / ebool / eaddress, never external* types
+}
+```
+
+Non-negotiables (see `CLAUDE.md` for the full list, this is the fhEVM-specific subset):
+
+- Every `FHE.fromExternal(input, proof)` call is immediately followed by `FHE.allowThis(...)`, and by `FHE.allow(..., user)` for any address that needs to read the result later.
+- Every arithmetic or comparison op produces a **new handle** with no ACL — re-grant `allowThis`/`allow` after every single FHE operation before it's stored or returned, not just at the end of a function.
+- Never `if`/`else` branch on an `ebool`. Use `FHE.select(condition, ifTrue, ifFalse)`.
+- Never store an `externalEuintXX` — convert with `FHE.fromExternal` first.
+- Never reuse an `inputProof` across transactions — it's a one-time ZKPoK bound to that specific call.
+
+## 3 — Zealed-Specific Pattern: Pull-Based Draw Check
+
+This is the one pattern in this codebase that isn't in any generic fhEVM reference, because it's Zealed's own architecture decision (see `build-brief.md` Section 5). Get this exactly right — it's the part most likely to be scrutinized if this submission is reviewed for the OpenZeppelin audit path.
+
+**Do not** implement winner selection as a loop over depositors. **Do** implement it as:
+
+```solidity
+// DrawManager.sol — sketch, not final implementation
+
+uint64 public drawRandomValue; // r — PLAINTEXT, public, finalized via commit-reveal
+uint256 public drawId;
+
+mapping(address => euint64) private _ticketStart;  // this user's cumulative range start
+mapping(address => euint64) private _ticketWeight; // this user's ticket weight
+mapping(uint256 => mapping(address => bool)) public hasChecked; // per-draw, per-user
+
+function checkIfWon(uint256 _drawId) external {
+    require(_drawId == drawId, "not current draw");
+    require(!hasChecked[_drawId][msg.sender], "already checked");
+    hasChecked[_drawId][msg.sender] = true;
+
+    euint64 start  = _ticketStart[msg.sender];
+    euint64 end    = FHE.add(start, _ticketWeight[msg.sender]);
+    euint64 rEnc   = FHE.asEuint64(drawRandomValue); // plaintext r lifted into an encrypted comparand
+
+    ebool inRange = FHE.and(FHE.ge(rEnc, start), FHE.lt(rEnc, end));
+
+    euint64 prize = FHE.select(inRange, _currentPrizeAmount(), FHE.asEuint64(0));
+    FHE.allowThis(prize);
+    FHE.allow(prize, msg.sender);
+    _pendingPrize[msg.sender] = prize;
+}
+```
+
+Why this shape specifically:
+
+- `r` is the only plaintext value in the comparison. It reveals nothing about any individual's position, only where the random draw landed in the total ticket space.
+- The comparison happens once, on demand, paid by the caller. No function in this contract should ever loop over a mapping of all depositors — if an agent writes one, that's a signal to stop and re-read this section.
+- `hasChecked` prevents a user from calling repeatedly to grind for a different result (the result is deterministic per draw regardless, but the guard also caps gas griefing).
+- The prize result is stored per-user, ACL-gated to that user only, and claimed/decrypted separately (Section 4).
+
+`_ticketStart` and `_ticketWeight` are maintained incrementally in `ConfidentialVault`/`TicketEngine` on every deposit/withdraw, not recomputed at draw time — this is what keeps draw settlement O(1) instead of O(n).
+
+## 4 — Prize Claim / Decryption
+
+Once `checkIfWon` has set `_pendingPrize[msg.sender]`, the user decrypts it client-side via the relayer SDK's user-decryption flow (EIP-712 signed permit), not via any on-chain admin path. Reference `references/prior-art.md` → frontend integration examples for the client-side pattern; check Section 0 of this file for whether the version in use needs the self-relaying `publicDecrypt`/`verifySignatures` flow instead for any value that gets revealed more broadly (e.g., the optional `revealWin()` flag from `build-brief.md` Section 9).
+
+## 5 — Testing
+
+Use Hardhat mock FHE mode for all unit tests (fast, no testnet, FHE ops computed in plaintext locally under the hood):
+
+```typescript
+// packages/contracts/test/DrawManager.test.ts
+import { ethers, fhevm } from "hardhat";
+import { expect } from "chai";
+
+describe("DrawManager.checkIfWon", () => {
+  it("does not loop over depositors and settles in O(1) gas regardless of pool size", async () => {
+    // Seed N depositors, confirm checkIfWon gas cost for one caller doesn't scale with N.
+    // This test exists specifically to guard the architecture decision in Section 3.
+  });
+
+  it("a user outside the drawn range receives a zero prize, not a revert", async () => {
+    // Losing must be a silent, encrypted zero — not an error path that leaks who lost.
+  });
+});
+```
+
+Two tests worth calling out because they test the *architecture*, not just correctness:
+
+1. A gas-regression test confirming `checkIfWon` cost doesn't grow with total depositor count.
+2. A confirmation that losing produces an encrypted zero, not a revert or a plaintext signal — a revert-on-loss pattern would leak win/loss information through transaction success/failure, which defeats the privacy goal even though no balance leaked.
+
+**This principle is repo-wide, not draw-specific.** `ConfidentialVault.withdraw()` already applies it: an oversized withdrawal resolves to a zero-value no-op via `FHE.select` rather than a revert. Apply the same shape to any future function whose success depends on an encrypted comparison.
+
+**Deposit/withdraw integration:** callers must call `setOperator(vaultAddress, ...)` on the underlying confidential asset before the vault can pull funds — same shape as an ERC-20 `approve()` before `transferFrom()`. The vault verifies the encrypted input, then pulls via the `euint64` `confidentialTransferFrom` overload. Needed by the Week 3 frontend deposit flow.
+
+## 6 — Deployment
+
+Sepolia only for this bounty (per `build-brief.md`). Inherit `SepoliaConfig`, never hardcode gateway/relayer addresses directly in a contract — pull them from the config import so a config change doesn't require a contract rewrite.
+
+## 7 — Reference Index
+
+- `references/prior-art.md` — annotated list of prior Zama Developer Program winner repos relevant to this build (vaults, treasuries, confidential distribution patterns) plus links to the official docs sections this skill draws from.
+- Official docs: `docs.zama.org/protocol/solidity-guides` (encrypted types, ACL, operations), `docs.zama.org/protocol/relayer-sdk-guides` (client-side encrypt/decrypt), `docs.zama.org/protocol/zama-protocol-litepaper` (architecture background if you need to explain *why* symbolic execution works this way).
+
+## 8 — Build Log
+
+Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Week 1 — ConfidentialVault shipped.**
+`@fhevm/solidity` 0.11.1, ERC-7984 via OpenZeppelin confidential contracts, `MockERC7984` as the local cUSDC stand-in. 6 passing tests: zero-address constructor guard, encrypted deposit + TWAB update with no plaintext in events, anytime withdrawal with no lockup, oversized withdrawal resolves to a silent zero transfer, TWAB accrual over time, per-depositor balance isolation.
+
+Patterns discovered and promoted into Sections 3/5:
+- The silent-zero-not-revert rule generalizes beyond the draw check — applies to any function branching on an encrypted comparison. First observed in `withdraw()`.
+- Deposit requires `setOperator(vaultAddress, ...)` on the underlying asset before the vault can pull funds via `confidentialTransferFrom` — same shape as ERC-20 `approve`/`transferFrom`. Frontend (Week 3) needs to account for this as a separate approval step.
+
+Next: `TicketEngine.sol` (Week 2), building ticket weight directly on the TWAB now in place.

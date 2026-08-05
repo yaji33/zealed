@@ -1,0 +1,36 @@
+---
+description: "fhEVM-specific rules for Zealed's smart contracts: encrypted types, ACL, and the pull-based draw pattern"
+globs: packages/contracts/**/*.sol,packages/contracts/**/*.ts
+alwaysApply: false
+---
+
+# Zealed — fhEVM Contract Rules
+
+Applies to Solidity contracts and their tests. Full reference: `.claude/skills/zealed-fhevm/SKILL.md` and `references/prior-art.md` in that same folder — this rule is the condensed version scoped for Cursor's context window.
+
+## Version currency — check first
+
+FHEVM v0.9 moved decryption from an Oracle/gateway-callback model to a self-relaying model (client-side decrypt via `@zama-fhe/relayer-sdk` + `FHE.verifySignatures()`, no `onlyGateway` callback). Check the installed `@fhevm/solidity` version against `docs.zama.org/protocol/solidity-guides/development-guide/migration` before writing any decryption flow — some public examples still show the older callback pattern.
+
+## Non-negotiables
+
+- Default to `euint64` for every amount (balances, TWAB, ticket weights, prizes). Only widen with a documented reason.
+- Every `FHE.fromExternal(input, proof)` call is immediately followed by `FHE.allowThis(...)`, plus `FHE.allow(..., user)` for anyone who needs to read the result later.
+- Every FHE operation produces a new handle with no ACL — re-grant `allowThis`/`allow` after each one, not just once at the end of a function.
+- Never `if`/`else` branch on an `ebool`. Use `FHE.select(condition, ifTrue, ifFalse)`.
+- Never store an `externalEuintXX` type — convert with `FHE.fromExternal` first.
+- Never reuse an `inputProof` across transactions.
+
+## The Zealed-specific pattern: pull-based draw check
+
+`DrawManager.checkIfWon()` is called per-user, does exactly one encrypted range comparison against the public random draw value `r`, and stores an ACL-gated encrypted prize result for that caller only. `_ticketStart` / `_ticketWeight` update incrementally on every deposit/withdraw, never recomputed at draw time. If a generated function loops over a mapping of all depositors to find a winner, that's wrong — stop and re-read `SKILL.md` Section 3.
+
+Losing must resolve to an encrypted zero, never a revert — a revert-on-loss path leaks win/loss through transaction success alone, which defeats the privacy goal even with no balance exposed.
+
+**This generalizes beyond the draw.** Any function where success/failure depends on an encrypted comparison (withdraw amount vs. balance, draw eligibility, anything else added later) resolves to a zero-value no-op on the failing branch via `FHE.select`, never a `require`/revert. Confirmed in `ConfidentialVault.withdraw()`: an oversized withdrawal silently transfers zero and leaves the balance unchanged rather than reverting. Treat this as the default for every new function that branches on encrypted state, not a special case for the draw.
+
+**Deposit/withdraw integration note:** the caller must call `setOperator(vaultAddress, ...)` on the underlying confidential asset before the vault can pull funds — the vault verifies the encrypted input, then pulls via the `euint64` `confidentialTransferFrom` overload. The Week 3 frontend deposit flow needs this operator-approval step before the first `deposit()` call, same shape as an ERC-20 `approve()` before `transferFrom()`.
+
+## Testing
+
+Hardhat mock FHE mode for all unit tests. Any test touching `checkIfWon` should include a gas-regression check confirming cost doesn't scale with total depositor count — that's the property the whole architecture depends on.

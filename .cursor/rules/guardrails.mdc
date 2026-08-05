@@ -1,0 +1,24 @@
+---
+description: "Zealed core guardrails: scope, deadline, and hard constraints that apply to every file in this repo"
+alwaysApply: true
+---
+
+# Zealed — Core Guardrails
+
+Confidential prize savings dApp for Zama Season 4 bounty (deadline Sep 5, 2026). Full spec: `build-brief.md` at repo root. This rule is the always-on summary — read the brief for anything not covered here.
+
+## Hard constraints, no exceptions
+
+1. Winner selection is pull-based (`checkIfWon()`, called per-user, one comparison each). Never write a loop over depositors to compute a draw winner.
+2. Principal withdrawal has no lockup, ever. Not gated by draw cycles, not a "design choice" to revisit.
+3. Never emit plaintext amounts in events, logs, or console output — including in test fixtures and debug code.
+4. Decryption is client-side only, via the user-decrypt / EIP-712 permit flow. No server-side or admin decrypt path on any user's balance or prize, including for debugging.
+5. Before implementing anything, check `build-brief.md` Section 10 ("Explicitly Out of Scope"). If it's listed there (Shadow Circles, anti-whale weighting, compliance view, multi-asset), don't build it — flag it back instead. Scope creep is the main risk against the deadline, not technical difficulty.
+
+## Definition of done
+
+A task is done when it has a test, doesn't violate anything above, and maps to a checklist item in `build-brief.md` Section 2 or the "ship-if-time" tier in Section 9. If it maps to neither, ask before building it.
+
+## Style
+
+TypeScript strict mode, no `any` without a comment explaining why. Solidity gets NatSpec on every external/public function, especially anything touching encrypted state — this may go to an OpenZeppelin audit if selected, write comments for that reader.

@@ -4,7 +4,7 @@ import { expect } from "chai";
 import { ethers, fhevm } from "hardhat";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 
-import { ConfidentialVault, ConfidentialVault__factory, MockERC7984, MockERC7984__factory } from "../types";
+import { ConfidentialVault, ConfidentialVault__factory, MockERC7984, MockERC7984__factory, TicketEngine, TicketEngine__factory } from "../types";
 
 type Signers = {
   deployer: HardhatEthersSigner;
@@ -163,5 +163,73 @@ describe("ConfidentialVault", function () {
 
     expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(aliceAmount));
     expect(await decryptUserBalance(signers.bob)).to.eq(BigInt(bobAmount));
+  });
+
+  it("reverts when setTicketEngine is called with the zero address", async function () {
+    await expect(vault.setTicketEngine(ethers.ZeroAddress)).to.be.revertedWithCustomError(
+      vault,
+      "InvalidTicketEngine",
+    );
+  });
+
+  it("withdraws successfully while TicketEngine is frozen; weight sync lags until unfreeze", async function () {
+    const ticketFactory = (await ethers.getContractFactory("TicketEngine")) as TicketEngine__factory;
+    const tickets = (await ticketFactory.deploy(vaultAddress)) as TicketEngine;
+    const ticketsAddress = await tickets.getAddress();
+
+    await (await vault.setTicketEngine(ticketsAddress)).wait();
+    await (await tickets.setDrawManager(signers.deployer.address)).wait();
+
+    const depositAmount = 1_000_000;
+    const withdrawAmount = 250_000;
+    await mintAndApprove(signers.alice, depositAmount);
+
+    const depositEnc = await encryptAmount(vaultAddress, signers.alice.address, depositAmount);
+    await (await vault.connect(signers.alice).deposit(depositEnc.handles[0], depositEnc.inputProof)).wait();
+
+    const index = await tickets.indexOf(signers.alice.address);
+    expect(index).to.eq(1n);
+
+    const weightAfterDeposit = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      await tickets.getWeight(index),
+      ticketsAddress,
+      signers.alice,
+    );
+    expect(weightAfterDeposit).to.eq(BigInt(depositAmount));
+
+    // Freeze ticket weights for an active draw — vault withdraw must still succeed.
+    await (await tickets.connect(signers.deployer).setFrozen(true)).wait();
+
+    const withdrawEnc = await encryptAmount(vaultAddress, signers.alice.address, withdrawAmount);
+    await expect(vault.connect(signers.alice).withdraw(withdrawEnc.handles[0], withdrawEnc.inputProof)).to.not.be
+      .reverted;
+
+    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(depositAmount - withdrawAmount));
+    expect(await decryptTokenBalance(signers.alice)).to.eq(BigInt(withdrawAmount));
+
+    // Ticket weight lagged: still the pre-withdraw TWAB while frozen.
+    const weightWhileFrozen = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      await tickets.getWeight(index),
+      ticketsAddress,
+      signers.alice,
+    );
+    expect(weightWhileFrozen).to.eq(BigInt(depositAmount));
+
+    // After freeze lifts, the next vault action syncs the lagged TWAB (not raw balance).
+    await (await tickets.connect(signers.deployer).setFrozen(false)).wait();
+    const catchUpEnc = await encryptAmount(vaultAddress, signers.alice.address, 0);
+    await (await vault.connect(signers.alice).withdraw(catchUpEnc.handles[0], catchUpEnc.inputProof)).wait();
+
+    const twabAfterUnfreeze = await decryptUserTwab(signers.alice);
+    const weightAfterUnfreeze = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      await tickets.getWeight(index),
+      ticketsAddress,
+      signers.alice,
+    );
+    expect(weightAfterUnfreeze).to.eq(twabAfterUnfreeze);
+    expect(weightAfterUnfreeze).to.not.eq(BigInt(depositAmount));
   });
 });

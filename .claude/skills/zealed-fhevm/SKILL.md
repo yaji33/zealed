@@ -73,11 +73,17 @@ Non-negotiables (see `CLAUDE.md` for the full list, this is the fhEVM-specific s
 - Never store an `externalEuintXX` — convert with `FHE.fromExternal` first.
 - Never reuse an `inputProof` across transactions — it's a one-time ZKPoK bound to that specific call.
 
-## 3 — Zealed-Specific Pattern: Pull-Based Draw Check
+## 3 — Zealed-Specific Pattern: Pull-Based Draw Check via Ticket Tree
 
 This is the one pattern in this codebase that isn't in any generic fhEVM reference, because it's Zealed's own architecture decision (see `build-brief.md` Section 5). Get this exactly right — it's the part most likely to be scrutinized if this submission is reviewed for the OpenZeppelin audit path.
 
-**Do not** implement winner selection as a loop over depositors. **Do** implement it as:
+**Do not** implement winner selection as a loop over depositors. **Do not** store a per-user cumulative start offset directly, either — that reintroduces an O(n) update on every other user's data whenever one user's weight changes, just moved from the draw to the deposit path. Instead:
+
+- `TicketEngine` maintains a **Fenwick tree (binary indexed tree)** over encrypted per-user weights. Each depositor gets a permanent index slot on first deposit, never reused.
+- Deposit/withdraw call `update(index, delta)`: O(log n) tree nodes touched, pure encrypted addition, no comparisons, no effect on any other user's slot.
+- `checkIfWon` computes the caller's cumulative start on demand via an O(log n) encrypted prefix-sum query — not from stored state — then does one encrypted range comparison against the public draw value `r`.
+- Fenwick walks **must** be bounded by a fixed `MAX_DEPOSITORS` (do not loop until `uint256` overflow). An unbounded walk burns ~256 FHE ops and hits `HCUTransactionLimitExceeded` (20M HCU/tx). Cap at `type(uint16).max` or smaller.
+- `syncWeightFromVault` **no-ops while frozen** (never reverts). Principal withdraw has no lockup — a frozen ticket tree must not block `ConfidentialVault.withdraw`. Self-service `syncWeight` may still revert when frozen. Weights catch up on the next vault sync after unfreeze.
 
 ```solidity
 // DrawManager.sol — sketch, not final implementation
@@ -85,8 +91,6 @@ This is the one pattern in this codebase that isn't in any generic fhEVM referen
 uint64 public drawRandomValue; // r — PLAINTEXT, public, finalized via commit-reveal
 uint256 public drawId;
 
-mapping(address => euint64) private _ticketStart;  // this user's cumulative range start
-mapping(address => euint64) private _ticketWeight; // this user's ticket weight
 mapping(uint256 => mapping(address => bool)) public hasChecked; // per-draw, per-user
 
 function checkIfWon(uint256 _drawId) external {
@@ -94,9 +98,12 @@ function checkIfWon(uint256 _drawId) external {
     require(!hasChecked[_drawId][msg.sender], "already checked");
     hasChecked[_drawId][msg.sender] = true;
 
-    euint64 start  = _ticketStart[msg.sender];
-    euint64 end    = FHE.add(start, _ticketWeight[msg.sender]);
-    euint64 rEnc   = FHE.asEuint64(drawRandomValue); // plaintext r lifted into an encrypted comparand
+    // TicketEngine.prefixSum(index) walks O(log n) tree nodes to compute
+    // this caller's cumulative start — not read from persistent storage.
+    euint64 start  = ticketEngine.prefixSum(indexOf[msg.sender]);
+    euint64 weight = ticketEngine.weightOf(indexOf[msg.sender]);
+    euint64 end    = FHE.add(start, weight);
+    euint64 rEnc   = FHE.asEuint64(drawRandomValue);
 
     ebool inRange = FHE.and(FHE.ge(rEnc, start), FHE.lt(rEnc, end));
 
@@ -110,11 +117,11 @@ function checkIfWon(uint256 _drawId) external {
 Why this shape specifically:
 
 - `r` is the only plaintext value in the comparison. It reveals nothing about any individual's position, only where the random draw landed in the total ticket space.
-- The comparison happens once, on demand, paid by the caller. No function in this contract should ever loop over a mapping of all depositors — if an agent writes one, that's a signal to stop and re-read this section.
+- The comparison happens once per user, on demand, paid by the caller. No function in this contract should ever loop over a mapping of all depositors — if an agent writes one, that's a signal to stop and re-read this section.
 - `hasChecked` prevents a user from calling repeatedly to grind for a different result (the result is deterministic per draw regardless, but the guard also caps gas griefing).
 - The prize result is stored per-user, ACL-gated to that user only, and claimed/decrypted separately (Section 4).
 
-`_ticketStart` and `_ticketWeight` are maintained incrementally in `ConfidentialVault`/`TicketEngine` on every deposit/withdraw, not recomputed at draw time — this is what keeps draw settlement O(1) instead of O(n).
+Total ticket count (needed to bound `r`) is the tree's root-level running sum, publicly decrypted via the self-relay flow at draw time — revealing the aggregate is fine, same disclosure category as the public TVL figure already on the aggregate dashboard.
 
 ## 4 — Prize Claim / Decryption
 
@@ -143,7 +150,7 @@ describe("DrawManager.checkIfWon", () => {
 
 Two tests worth calling out because they test the *architecture*, not just correctness:
 
-1. A gas-regression test confirming `checkIfWon` cost doesn't grow with total depositor count.
+1. A gas-regression test confirming `checkIfWon` cost scales logarithmically (O(log n)) with total depositor count, not linearly — the whole point of the Fenwick tree design is that this holds.
 2. A confirmation that losing produces an encrypted zero, not a revert or a plaintext signal — a revert-on-loss pattern would leak win/loss information through transaction success/failure, which defeats the privacy goal even though no balance leaked.
 
 **This principle is repo-wide, not draw-specific.** `ConfidentialVault.withdraw()` already applies it: an oversized withdrawal resolves to a zero-value no-op via `FHE.select` rather than a revert. Apply the same shape to any future function whose success depends on an encrypted comparison.
@@ -162,6 +169,27 @@ Sepolia only for this bounty (per `build-brief.md`). Inherit `SepoliaConfig`, ne
 ## 8 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Week 2 — vault ↔ TicketEngine wiring.**
+`ConfidentialVault.setTicketEngine` (onlyOwner, zero-address guard). Deposit/withdraw end with `FHE.allowTransient(twab, ticketEngine)` + `syncWeightFromVault`. Hard rule: `syncWeightFromVault` **no-ops while frozen** (does not revert) so principal withdraw never fails during an active draw; self-service `syncWeight` still reverts when frozen. Test: withdraw succeeds while frozen, weight lags, catches up to TWAB after unfreeze. Original 6 vault tests unchanged and still passing.
+
+---
+
+**Week 2 — TicketEngine + DrawManager shipped.**
+Fenwick tree over `euint64` weights (`TicketEngine.sol`): permanent 1-based slots, `syncWeight` / `syncWeightFromVault`, on-demand `prefixSumBefore` / `weightOf`, publicly decryptable `totalTickets`. `DrawManager.sol`: commit → future `blockhash` reveal with KMS `checkSignatures` on total, pull-based `checkIfWon` with `FHE.select` silent zero on loss, `hasChecked` guard. 7 new tests passing (13 total with vault): lose=encrypted zero, O(log n) gas regression (4 vs 16 depositors), commit-reveal manipulation (too-early / forged proof / 256-block expiry), index permanence, freeze.
+
+Patterns promoted into Section 3:
+- Fenwick update/query loops **must** be bounded by a fixed `MAX_DEPOSITORS` (here `type(uint16).max`). Walking until `uint256` overflow does ~256 sequential FHE ops and reverts with `HCUTransactionLimitExceeded` under the 20M HCU/tx cap.
+- Vault wiring followed in a separate commit: see "vault ↔ TicketEngine wiring" entry above.
+
+Next: Week 3 frontend.
+
+---
+
+**Pre-Week 2 — design correction: contiguous ticket ranges replaced with a Fenwick tree.**
+The original TicketEngine sketch stored each user's cumulative range start directly, assigned contiguously across depositors. Caught before implementation: this means any deposit/withdrawal by an earlier user shifts every later user's stored start, an O(n) update hiding behind an O(1)-looking design — moved the exact problem the pull-based check was built to avoid from the draw path to the deposit path. Replaced with a Fenwick tree (binary indexed tree) over encrypted weights: permanent per-user index slots, O(log n) updates on deposit/withdraw with no cross-user effect, cumulative start computed on demand via O(log n) prefix-sum query at `checkIfWon` time rather than stored. `build-brief.md` Section 5 and this file's Section 3 both updated. Complexity is O(log n), not true O(1) as originally stated — still effectively flat for realistic depositor counts.
 
 ---
 

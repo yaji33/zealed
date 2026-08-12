@@ -165,6 +165,40 @@ describe("ConfidentialVault", function () {
     expect(await decryptUserBalance(signers.bob)).to.eq(BigInt(bobAmount));
   });
 
+  async function publicDecryptTotal(): Promise<bigint> {
+    const handle = await vault.totalDeposits();
+    const result = await fhevm.publicDecrypt([handle]);
+    return result.clearValues[handle] as bigint;
+  }
+
+  it("tracks publicly decryptable TVL across deposits/withdraws; oversized withdraw leaves total unchanged", async function () {
+    const aliceDeposit = 1_000_000;
+    const bobDeposit = 400_000;
+    const aliceWithdraw = 250_000;
+    await mintAndApprove(signers.alice, aliceDeposit);
+    await mintAndApprove(signers.bob, bobDeposit);
+
+    expect(await publicDecryptTotal()).to.eq(0n);
+
+    const aliceEnc = await encryptAmount(vaultAddress, signers.alice.address, aliceDeposit);
+    await (await vault.connect(signers.alice).deposit(aliceEnc.handles[0], aliceEnc.inputProof)).wait();
+    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit));
+
+    const bobEnc = await encryptAmount(vaultAddress, signers.bob.address, bobDeposit);
+    await (await vault.connect(signers.bob).deposit(bobEnc.handles[0], bobEnc.inputProof)).wait();
+    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit + bobDeposit));
+
+    const withdrawEnc = await encryptAmount(vaultAddress, signers.alice.address, aliceWithdraw);
+    await (await vault.connect(signers.alice).withdraw(withdrawEnc.handles[0], withdrawEnc.inputProof)).wait();
+    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit + bobDeposit - aliceWithdraw));
+
+    const totalBeforeNoOp = await publicDecryptTotal();
+    const oversized = await encryptAmount(vaultAddress, signers.bob.address, bobDeposit * 10);
+    await (await vault.connect(signers.bob).withdraw(oversized.handles[0], oversized.inputProof)).wait();
+    expect(await publicDecryptTotal()).to.eq(totalBeforeNoOp);
+    expect(await decryptUserBalance(signers.bob)).to.eq(BigInt(bobDeposit));
+  });
+
   it("reverts when setTicketEngine is called with the zero address", async function () {
     await expect(vault.setTicketEngine(ethers.ZeroAddress)).to.be.revertedWithCustomError(
       vault,

@@ -17,6 +17,8 @@ import {TicketEngine} from "./TicketEngine.sol";
  *      Events signal that an action occurred but never include plaintext amounts.
  *      After each deposit/withdraw, the current TWAB is pushed to `TicketEngine`
  *      (no-op sync while the engine is frozen for a draw — withdraw still succeeds).
+ *      Running encrypted TVL (`_totalDeposits`) is updated O(1) per deposit/withdraw
+ *      and is publicly decryptable (same disclosure class as TicketEngine.totalTickets).
  */
 contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     /// @notice Confidential deposit asset (cUSDC / ERC-7984).
@@ -36,6 +38,9 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
 
     /// @dev First checkpoint timestamp for the running TWAB window.
     mapping(address account => uint256 timestamp) private _firstUpdate;
+
+    /// @dev Encrypted sum of all vault deposits (publicly decryptable aggregate TVL).
+    euint64 private _totalDeposits;
 
     /// @notice Emitted when `account` deposits. No amount is included.
     event Deposited(address indexed account);
@@ -58,6 +63,9 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     constructor(address asset_) Ownable(msg.sender) {
         if (asset_ == address(0)) revert InvalidAsset();
         asset = IERC7984(asset_);
+        _totalDeposits = FHE.asEuint64(0);
+        FHE.allowThis(_totalDeposits);
+        _totalDeposits = FHE.makePubliclyDecryptable(_totalDeposits);
     }
 
     /**
@@ -112,6 +120,23 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Encrypted vault TVL (sum of all deposits). Aggregate disclosure only.
+     * @dev Same disclosure class as TicketEngine.totalTickets — publicly decryptable
+     *      via the self-relay flow; never exposes an individual's balance.
+     */
+    function totalDeposits() external view returns (euint64) {
+        return _totalDeposits;
+    }
+
+    /**
+     * @notice Marks the vault TVL handle as publicly decryptable for the self-relay flow.
+     * @dev Safe for anyone to call; revealing the aggregate is intentional.
+     */
+    function makeTotalPubliclyDecryptable() external {
+        _totalDeposits = FHE.makePubliclyDecryptable(_totalDeposits);
+    }
+
+    /**
      * @notice Deposit an encrypted cUSDC amount into the vault.
      * @param encryptedAmount Externally encrypted deposit amount (`externalEuint64`).
      * @param inputProof ZK proof authenticating `encryptedAmount`.
@@ -129,6 +154,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
 
         _checkpoint(msg.sender);
         _credit(msg.sender, transferred);
+        _addToTotal(transferred);
 
         emit Deposited(msg.sender);
         _syncTickets(msg.sender);
@@ -142,6 +168,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
      *      (via FHE select) rather than reverting, so win/loss-style leakage cannot
      *      occur through transaction success alone. Withdrawal is never gated by draws —
      *      TicketEngine freeze causes weight sync to lag, not a withdraw revert.
+     *      TVL is adjusted by `toWithdraw` only (encrypted zero on oversized no-op).
      */
     function withdraw(externalEuint64 encryptedAmount, bytes calldata inputProof) external nonReentrant {
         euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
@@ -165,6 +192,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
         FHE.allowThis(toWithdraw);
         FHE.allowTransient(toWithdraw, address(asset));
         asset.confidentialTransfer(msg.sender, toWithdraw);
+        _subFromTotal(toWithdraw);
 
         emit Withdrawn(msg.sender);
         _syncTickets(msg.sender);
@@ -245,5 +273,24 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
         FHE.allowThis(twab);
         FHE.allow(twab, account);
         _twabs[account] = twab;
+    }
+
+    /**
+     * @dev Increments the running encrypted TVL by `delta` (O(1) encrypted add).
+     */
+    function _addToTotal(euint64 delta) private {
+        euint64 updated = FHE.add(_totalDeposits, delta);
+        FHE.allowThis(updated);
+        _totalDeposits = FHE.makePubliclyDecryptable(updated);
+    }
+
+    /**
+     * @dev Decrements the running encrypted TVL by `delta` (O(1) encrypted sub).
+     *      Oversized-withdraw silent zero leaves the total unchanged.
+     */
+    function _subFromTotal(euint64 delta) private {
+        euint64 updated = FHE.sub(_totalDeposits, delta);
+        FHE.allowThis(updated);
+        _totalDeposits = FHE.makePubliclyDecryptable(updated);
     }
 }

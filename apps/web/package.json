@@ -1,0 +1,27 @@
+{
+  "name": "@zealed/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.66.9",
+    "@wagmi/core": "^2.22.1",
+    "@zama-fhe/relayer-sdk": "0.4.1",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "viem": "^2.23.5",
+    "wagmi": "^2.14.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.30",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "typescript": "^5.9.3"
+  }
+}

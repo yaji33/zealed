@@ -77,9 +77,9 @@ This section is a snapshot, not a guarantee — update it as new modules land. C
 | ConfidentialVault | transfers zero and keeps balance when withdraw exceeds encrypted balance | ✅ |
 | ConfidentialVault | accrues TWAB over time as a time-weighted average of balance | ✅ |
 | ConfidentialVault | isolates balances across depositors | ✅ |
-| TicketEngine | — | pending (Week 2) |
-| DrawManager | — | pending (Week 2) |
-| Frontend flows | — | pending (Week 3) |
+| TicketEngine | Fenwick indices, weight sync, freeze semantics | ✅ |
+| DrawManager | checkIfWon O(log n), lose=encrypted zero, commit-reveal | ✅ |
+| Frontend flows | public + private dashboard scaffold | ✅ (Week 3) |
 
 Run locally:
 
@@ -100,10 +100,10 @@ pnpm --filter @zealed/contracts test
 
 **In scope for the Season 4 bounty submission (by Sep 5, 2026):**
 - Confidential deposit/withdraw vault — shipped
-- TicketEngine + pull-based draw settlement — in progress
-- Prize claim with client-side decryption
-- Public aggregate view + private wallet-gated dashboard
-- Optional post-win selective disclosure (`revealWin()`) — reveal that you won without revealing the amount
+- TicketEngine + pull-based draw settlement — shipped
+- Prize claim with client-side decryption — UI shipped (decrypt pending prize)
+- Public aggregate view + private wallet-gated dashboard — shipped (`apps/web`)
+- Optional post-win selective disclosure (`revealWin()`) — blocked on contracts (not implemented yet)
 
 **Path to production, if selected for further development:**
 - Professional smart contract audit (Zama has indicated OpenZeppelin audit support for the strongest submission)

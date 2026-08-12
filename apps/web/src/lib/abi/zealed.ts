@@ -159,6 +159,16 @@ export const drawManagerAbi = [
   },
   {
     type: "function",
+    name: "winRevealed",
+    stateMutability: "view",
+    inputs: [
+      { name: "draw", type: "uint256" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
     name: "checkIfWon",
     stateMutability: "nonpayable",
     inputs: [{ name: "_drawId", type: "uint256" }],
@@ -166,9 +176,30 @@ export const drawManagerAbi = [
   },
   {
     type: "function",
+    name: "revealWin",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_drawId", type: "uint256" },
+      { name: "wonCleartext", type: "bool" },
+      { name: "decryptionProof", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
     name: "getPendingPrize",
     stateMutability: "view",
     inputs: [],
+    outputs: [{ name: "", type: "bytes32" }],
+  },
+  {
+    type: "function",
+    name: "getWonFlag",
+    stateMutability: "view",
+    inputs: [
+      { name: "draw", type: "uint256" },
+      { name: "account", type: "address" },
+    ],
     outputs: [{ name: "", type: "bytes32" }],
   },
   {
@@ -195,6 +226,15 @@ export const drawManagerAbi = [
     inputs: [
       { name: "drawId", type: "uint256", indexed: true },
       { name: "account", type: "address", indexed: true },
+    ],
+  },
+  {
+    type: "event",
+    name: "WinRevealed",
+    inputs: [
+      { name: "drawId", type: "uint256", indexed: true },
+      { name: "account", type: "address", indexed: true },
+      { name: "tier", type: "uint8", indexed: false },
     ],
   },
 ] as const;

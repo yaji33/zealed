@@ -30,6 +30,8 @@ export function PrivateDashboard() {
   const [weight, setWeight] = useState<bigint | null>(null);
   const [prize, setPrize] = useState<bigint | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Off by default — build-brief §9 selective disclosure. */
+  const [revealWinEnabled, setRevealWinEnabled] = useState(false);
 
   const vault = addresses.vault;
   const asset = addresses.asset;
@@ -62,6 +64,14 @@ export function PrivateDashboard() {
     address: draw,
     abi: drawManagerAbi,
     functionName: "hasChecked",
+    args: drawId !== undefined && address ? [drawId, address] : undefined,
+    query: { enabled: Boolean(draw && address && drawId !== undefined) },
+  });
+
+  const { data: alreadyWinRevealed, refetch: refetchWinRevealed } = useReadContract({
+    address: draw,
+    abi: drawManagerAbi,
+    functionName: "winRevealed",
     args: drawId !== undefined && address ? [drawId, address] : undefined,
     query: { enabled: Boolean(draw && address && drawId !== undefined) },
   });
@@ -241,6 +251,47 @@ export function PrivateDashboard() {
     });
   }
 
+  async function onRevealWin() {
+    if (!draw || !fhe.instance || drawId === undefined || !address) return;
+    await withBusy("Publishing win (tier only)…", async () => {
+      const { createPublicClient, http } = await import("viem");
+      const { activeChain } = await import("@/lib/config");
+      const client = createPublicClient({
+        chain: activeChain,
+        transport: http(process.env.NEXT_PUBLIC_RPC_URL),
+      });
+      const handle = (await client.readContract({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "getWonFlag",
+        args: [drawId, address],
+      })) as Hex;
+
+      if (!handle || /^0x0+$/.test(handle)) {
+        throw new Error("No win flag — call checkIfWon first.");
+      }
+
+      const decrypted = await fhe.instance.publicDecrypt([handle]);
+      const clear = decrypted.clearValues[handle];
+      const won = clear === true || clear === 1n || clear === 1 || clear === "true";
+      if (!won) {
+        throw new Error("Win flag is false — only winners can publish.");
+      }
+
+      await writeContractAsync({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "revealWin",
+        args: [drawId, true, decrypted.decryptionProof as Hex],
+      });
+      await refetchWinRevealed();
+      setStatus({
+        kind: "ok",
+        text: "Published WinRevealed (tier only). Prize amount was not disclosed.",
+      });
+    });
+  }
+
   if (!isConnected) {
     return (
       <section className="panel">
@@ -380,6 +431,34 @@ export function PrivateDashboard() {
           There is no separate on-chain prize transfer yet — “claim” means decrypting your ACL-gated pending
           prize handle client-side.
         </p>
+        <label className="field row" style={{ alignItems: "center", gap: "0.75rem", marginTop: "1rem" }}>
+          <input
+            type="checkbox"
+            checked={revealWinEnabled}
+            onChange={(e) => setRevealWinEnabled(e.target.checked)}
+            disabled={Boolean(alreadyWinRevealed)}
+          />
+          <span>
+            Reveal that I won (tier only, no amount) — off by default
+            {alreadyWinRevealed ? " · already published" : ""}
+          </span>
+        </label>
+        <button
+          type="button"
+          className="btn secondary"
+          disabled={
+            !revealWinEnabled ||
+            !configured ||
+            !fhe.ready ||
+            !hasChecked ||
+            Boolean(alreadyWinRevealed) ||
+            working ||
+            drawId === undefined
+          }
+          onClick={() => void onRevealWin()}
+        >
+          revealWin()
+        </button>
       </div>
 
       {(busy || status.text) && (

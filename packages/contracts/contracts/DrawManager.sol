@@ -48,11 +48,20 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     /// @notice Public prize size for the current draw (aggregate disclosure).
     uint64 public prizeAmountPlain;
 
+    /// @notice Single prize tier for the current protocol (ship-if-time selective disclosure).
+    uint8 public constant TIER_MAIN = 1;
+
     /// @dev Per-draw, per-user guard — one checkIfWon attempt each.
     mapping(uint256 draw => mapping(address account => bool checked)) public hasChecked;
 
+    /// @notice Whether `account` has optionally published a win for `draw` (off by default).
+    mapping(uint256 draw => mapping(address account => bool revealed)) public winRevealed;
+
     /// @dev Encrypted pending prize per user (ACL-gated to that user).
     mapping(address account => euint64 prize) private _pendingPrize;
+
+    /// @dev Encrypted win flag from checkIfWon; publicly decryptable for optional revealWin.
+    mapping(uint256 draw => mapping(address account => ebool won)) private _won;
 
     /// @notice Emitted when a draw is committed to a future randomness block.
     event DrawCommitted(uint256 indexed drawId, uint256 revealBlock, uint64 prizeAmount);
@@ -62,6 +71,9 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
 
     /// @notice Emitted when a user checks the current draw. No win/loss or amount.
     event DrawChecked(uint256 indexed drawId, address indexed account);
+
+    /// @notice Optional selective disclosure: address won a tier. No prize amount.
+    event WinRevealed(uint256 indexed drawId, address indexed account, uint8 tier);
 
     error InvalidTicketEngine();
     error DrawNotCommitted();
@@ -76,6 +88,9 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     error AlreadyChecked();
     error WrongDrawId();
     error NotRegistered();
+    error NotChecked();
+    error AlreadyWinRevealed();
+    error NotAWinner();
 
     /**
      * @param ticketEngine_ Deployed TicketEngine (Fenwick ticket weights).
@@ -173,13 +188,44 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
 
         euint64 rEnc = FHE.asEuint64(drawRandomValue);
         ebool inRange = FHE.and(FHE.ge(rEnc, start), FHE.lt(rEnc, end));
+        FHE.allowThis(inRange);
+        // Publicly decryptable so a winner can optionally prove the flag via self-relay
+        // without revealing their encrypted prize amount.
+        ebool wonFlag = FHE.makePubliclyDecryptable(inRange);
+        _won[_drawId][msg.sender] = wonFlag;
 
-        euint64 prize = FHE.select(inRange, FHE.asEuint64(prizeAmountPlain), FHE.asEuint64(0));
+        euint64 prize = FHE.select(wonFlag, FHE.asEuint64(prizeAmountPlain), FHE.asEuint64(0));
         FHE.allowThis(prize);
         FHE.allow(prize, msg.sender);
         _pendingPrize[msg.sender] = prize;
 
         emit DrawChecked(_drawId, msg.sender);
+    }
+
+    /**
+     * @notice Optionally publish that `msg.sender` won tier `TIER_MAIN` for `_drawId`.
+     * @param _drawId Draw previously checked via `checkIfWon`.
+     * @param wonCleartext Public decryption of the caller's encrypted win flag (must be true).
+     * @param decryptionProof KMS self-relay proof for `wonCleartext`.
+     * @dev Off by default — callers opt in. Verifies the stored `ebool` via `checkSignatures`
+     *      so losers (or unchecked addresses) cannot falsely claim a win. Emits tier only;
+     *      never the prize amount. Safe for past draws as long as `hasChecked` was set.
+     */
+    function revealWin(uint256 _drawId, bool wonCleartext, bytes calldata decryptionProof) external nonReentrant {
+        if (_drawId == 0) revert WrongDrawId();
+        if (!hasChecked[_drawId][msg.sender]) revert NotChecked();
+        if (winRevealed[_drawId][msg.sender]) revert AlreadyWinRevealed();
+        if (!wonCleartext) revert NotAWinner();
+
+        ebool flag = _won[_drawId][msg.sender];
+        if (!FHE.isInitialized(flag)) revert NotChecked();
+
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = ebool.unwrap(flag);
+        FHE.checkSignatures(handles, abi.encode(wonCleartext), decryptionProof);
+
+        winRevealed[_drawId][msg.sender] = true;
+        emit WinRevealed(_drawId, msg.sender, TIER_MAIN);
     }
 
     /**
@@ -195,6 +241,15 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
      */
     function getPendingPrizeOf(address account) external view returns (euint64) {
         return _pendingPrize[account];
+    }
+
+    /**
+     * @notice Encrypted win flag for `account` on `draw` (publicly decryptable after checkIfWon).
+     * @param draw Draw id.
+     * @param account User who called `checkIfWon`.
+     */
+    function getWonFlag(uint256 draw, address account) external view returns (ebool) {
+        return _won[draw][account];
     }
 
     /**

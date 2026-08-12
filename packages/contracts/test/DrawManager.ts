@@ -210,4 +210,47 @@ describe("DrawManager", function () {
       "AlreadyChecked",
     );
   });
+
+  it("revealWin publishes tier without amount; losers and unchecked users cannot claim", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    await syncWeight(tickets, ticketsAddress, signers.bob, 100);
+
+    const { drawId, r } = await commitAndReveal();
+    await (await draw.connect(signers.alice).checkIfWon(drawId)).wait();
+    await (await draw.connect(signers.bob).checkIfWon(drawId)).wait();
+
+    const winner = r < 100n ? signers.alice : signers.bob;
+    const loser = r < 100n ? signers.bob : signers.alice;
+
+    // Unchecked third party cannot reveal.
+    await expect(draw.connect(signers.deployer).revealWin(drawId, true, "0x")).to.be.revertedWithCustomError(
+      draw,
+      "NotChecked",
+    );
+
+    // Loser: valid public decrypt of false flag still cannot claim a win.
+    const loserHandle = await draw.getWonFlag(drawId, loser.address);
+    const loserDecrypt = await fhevm.publicDecrypt([loserHandle]);
+    const loserClear = loserDecrypt.clearValues[loserHandle] as boolean;
+    expect(loserClear).to.eq(false);
+    await expect(
+      draw.connect(loser).revealWin(drawId, false, loserDecrypt.decryptionProof),
+    ).to.be.revertedWithCustomError(draw, "NotAWinner");
+    await expect(draw.connect(loser).revealWin(drawId, true, "0x")).to.be.reverted;
+
+    // Winner: opt-in reveal emits tier only (no amount).
+    const winnerHandle = await draw.getWonFlag(drawId, winner.address);
+    const winnerDecrypt = await fhevm.publicDecrypt([winnerHandle]);
+    const winnerClear = winnerDecrypt.clearValues[winnerHandle] as boolean;
+    expect(winnerClear).to.eq(true);
+
+    await expect(draw.connect(winner).revealWin(drawId, true, winnerDecrypt.decryptionProof))
+      .to.emit(draw, "WinRevealed")
+      .withArgs(drawId, winner.address, 1);
+
+    expect(await draw.winRevealed(drawId, winner.address)).to.eq(true);
+    await expect(
+      draw.connect(winner).revealWin(drawId, true, winnerDecrypt.decryptionProof),
+    ).to.be.revertedWithCustomError(draw, "AlreadyWinRevealed");
+  });
 });

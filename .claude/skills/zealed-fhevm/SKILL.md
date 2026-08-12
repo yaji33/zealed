@@ -125,7 +125,7 @@ Total ticket count (needed to bound `r`) is the tree's root-level running sum, p
 
 ## 4 — Prize Claim / Decryption
 
-Once `checkIfWon` has set `_pendingPrize[msg.sender]`, the user decrypts it client-side via the relayer SDK's user-decryption flow (EIP-712 signed permit), not via any on-chain admin path. Reference `references/prior-art.md` → frontend integration examples for the client-side pattern; check Section 0 of this file for whether the version in use needs the self-relaying `publicDecrypt`/`verifySignatures` flow instead for any value that gets revealed more broadly (e.g., the optional `revealWin()` flag from `build-brief.md` Section 9).
+Once `checkIfWon` has set `_pendingPrize[msg.sender]`, the user decrypts it client-side via the relayer SDK's user-decryption flow (EIP-712 signed permit), not via any on-chain admin path. Optional `revealWin()` (build-brief §9) does **not** decrypt the prize amount: it stores a publicly decryptable `ebool` win flag at check time, then verifies that flag via self-relay `publicDecrypt` + `FHE.checkSignatures` and emits `WinRevealed(drawId, account, tier)` only. Never add an admin/server decrypt path for balances or prizes.
 
 ## 5 — Testing
 
@@ -169,6 +169,16 @@ Sepolia only for this bounty (per `build-brief.md`). Inherit `SepoliaConfig`, ne
 ## 8 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Week 4 — public vault TVL + `revealWin` selective disclosure.**
+`ConfidentialVault`: running `euint64 _totalDeposits` via encrypted add/sub on deposit/withdraw (oversized withdraw uses encrypted-zero `toWithdraw` so TVL is unchanged); `totalDeposits()` + self-relay public decrypt (same class as TicketEngine.totalTickets). `apps/web` public view reads real TVL. `DrawManager.revealWin`: stores publicly decryptable `ebool` at `checkIfWon`, verifies via `checkSignatures`, emits `WinRevealed` with tier only; dashboard toggle off by default. Security pass: no per-user plaintext amounts in events; external-call paths stay `nonReentrant`; existing commit-reveal tests still pass.
+
+---
+
+**Week 3 — frontend scaffold (`apps/web`).**
+Next.js 15 + wagmi/viem + `@zama-fhe/relayer-sdk` 0.4.1. Public view: draw history + prize/yield aggregates from events; TVL completed in Week 4. Private dashboard: explicit `setOperator` step, deposit/withdraw with client encrypt, user-decrypt EIP-712 for balance/TWAB/weight/prize, `checkIfWon` + decrypt pending prize + optional `revealWin` (Week 4).
 
 ---
 

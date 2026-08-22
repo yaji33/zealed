@@ -19,9 +19,12 @@
     "wagmi": "^2.14.12"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^20.19.30",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
   }
 }

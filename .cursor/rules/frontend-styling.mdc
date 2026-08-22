@@ -1,0 +1,14 @@
+---
+description: "apps/web styling — Tailwind utilities in JSX; globals.css is tokens and resets only"
+globs: apps/web/**/*
+alwaysApply: false
+---
+
+# Frontend styling (`apps/web`)
+
+- **Tailwind v4 utilities in JSX** are the standard for all UI. Design tokens live in `apps/web/tailwind.config.ts` (`void`, `ink`, `ember`, `mint`, `muted`, `line`, plus dashboard semantics).
+- **`globals.css`** is tokens and resets only: `@import "tailwindcss"`, `@config`, fonts, base-layer `html`/`body`/`a`/`code`. No bespoke component classes (`.landing-*`, `.panel`, `.btn`, etc.).
+- Repeated long dashboard class strings may use `src/lib/uiClasses.ts`. Do not add new named classes to `globals.css` — use arbitrary values in JSX instead.
+- Dot-matrix / ASCII components (`AsciiPoolField`): logic in TS; outer layout only via Tailwind.
+
+Full convention: `.claude/skills/zealed-fhevm/SKILL.md` Section 7.

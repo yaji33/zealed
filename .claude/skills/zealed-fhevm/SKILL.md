@@ -20,7 +20,7 @@ Both were built specifically as agent-facing FHEVM references (Season 2/3 bounty
 
 This skill grows with the build. It should not stay static from Week 1 to submission. After any module ships (vault, ticket engine, draw manager, claim flow, frontend integration), whoever ships it — agent or Jay — does two things before moving on:
 
-1. **Append an entry to the Build Log (Section 8, bottom of this file).** One short block: what shipped, what was learned, date/milestone. Keep it terse, this is a log, not a report.
+1. **Append an entry to the Build Log (Section 9, bottom of this file).** One short block: what shipped, what was learned, date/milestone. Keep it terse, this is a log, not a report.
 2. **Promote durable rules into the numbered sections above.** If something discovered while building is a rule that should bind *future* code (not just describe what happened), it doesn't just live in the log — it gets folded into Section 1–6 as an actual constraint, the way the silent-zero-on-encrypted-branch rule and the `setOperator` deposit note were folded into Sections 3 and 5 after the vault shipped. The log is the audit trail of when and why; the numbered sections are the enforced current state.
 
 Keep `.cursor/rules/fhevm-contracts.mdc` in sync with the numbered sections (1–6) only — that file stays lean and scoped per Cursor's context-budget conventions, so the Build Log does not get mirrored there. Cursor gets the current rules, this file gets the current rules plus the history of how they were arrived at.
@@ -161,14 +161,45 @@ Two tests worth calling out because they test the *architecture*, not just corre
 
 Sepolia only for this bounty (per `build-brief.md`). Inherit `SepoliaConfig`, never hardcode gateway/relayer addresses directly in a contract — pull them from the config import so a config change doesn't require a contract rewrite.
 
-## 7 — Reference Index
+## 7 — Frontend styling (`apps/web`)
+
+Tailwind v4 utilities in JSX are the standard for all UI in `apps/web`. Design tokens live in `tailwind.config.ts` (`void`, `ink`, `ember`, `mint`, `muted`, `line`, plus dashboard semantics `elevated`, `soft`, `accent`, `public`, `private`, `danger`, `ok`). Use `bg-void`, `text-ember`, `border-line`, `font-mono`, etc. — not ad-hoc hex in components.
+
+`globals.css` is **tokens and resets only**: `@import "tailwindcss"`, `@config`, Google Fonts import, base-layer resets (`html`, `body`, `a`, `code`). No bespoke component classes (`.landing-*`, `.panel`, `.btn`, …). Dashboard panels/buttons that repeat long class strings may import shared constants from `src/lib/uiClasses.ts`; do not add new named classes to `globals.css` to work around Tailwind.
+
+Dot-matrix / ASCII art (`AsciiPoolField`): rendering logic stays in TS; only outer layout uses Tailwind on the component wrapper.
+
+## 8 — Reference Index
 
 - `references/prior-art.md` — annotated list of prior Zama Developer Program winner repos relevant to this build (vaults, treasuries, confidential distribution patterns) plus links to the official docs sections this skill draws from.
 - Official docs: `docs.zama.org/protocol/solidity-guides` (encrypted types, ACL, operations), `docs.zama.org/protocol/relayer-sdk-guides` (client-side encrypt/decrypt), `docs.zama.org/protocol/zama-protocol-litepaper` (architecture background if you need to explain *why* symbolic execution works this way).
 
-## 8 — Build Log
+## 9 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Week 4 — landing page (`apps/web`), full Tailwind migration.**
+
+Reconciled design tokens into `tailwind.config.ts` (single source: `void`/`ink`/`ember`/`mint`/`line`/`muted` + dashboard `elevated`/`soft`/`accent`/`public`/`private`/`danger`/`ok`). Removed all bespoke component classes from `globals.css` (landing, pool field, dashboard panels/stats/buttons/tables). Landing (`page.tsx`, `AsciiPoolField`, `HowItWorksSection`, `StepDotIcon` layout) and dashboard (`SiteHeader`, `PrivateDashboard`, `PublicOverview`) now use Tailwind utilities in JSX; repeated dashboard strings live in `src/lib/uiClasses.ts`. Promoted Section 7 (frontend styling convention).
+
+---
+Installed Tailwind v4 (`@tailwindcss/postcss`, `tailwind.config.ts` for ember/ink tokens + keyframes). "How it works" moved to `HowItWorksSection.tsx` + `StepDotIcon.tsx` with utility classes only; removed all `.landing-step*` / `.step-glyph*` from `globals.css`. Cards: `grid-cols-1 sm:grid-cols-2`, `max-w-xl` grid, `max-w-[16.5rem]` per card. Hover fixed via `group`/`group-hover:` on `<article>` (no mount animation). Dot-matrix icons rebuilt per step: deposit absorb (1,000 → bracket fill), yield bars L→R + baseline + `+`, draw noise field + legible 4217, claim mid-open lock + 2,340 through gap.
+
+---
+
+**Week 4 — landing page (`apps/web`), how-it-works refactor.**
+"How it works" cards: dropped 1px bordered boxes and interior grid backgrounds. Bracket-corner frame (hairline L-marks, dotted rule between icon and copy), step index `01`–`04` in IBM Plex Mono tucked at top-left near the bracket. Line-art CSS diagrams replaced with `StepDotIcon.tsx`: deterministic 32×24 dot-matrix halftone per step (deposit token→vault, yield bars, draw noise→public value, claim lock→prize), ember dots at varying opacity/scale; hover sharpens shape and fades ambient noise (200ms, no card lift; `prefers-reduced-motion` falls back to opacity only). Copy, order, and section title unchanged.
+
+---
+
+**Week 4 — landing page (`apps/web`).**
+Full marketing landing at `/`: hero (hero-bg.png asset, DM Sans headline, Fraunces italic accent), then how it works (zigzag, per-step ASCII glyph art), visible vs sealed, under the hood (contract cards linking Sepolia Etherscan), FAQ, footer. Hero stat row replaced with an ASCII halftone "pool surface" (`AsciiPoolField.tsx`): seeded deterministic glyph grid (SSR-safe), ember noise as the encrypted field, live plaintext stats (TVL public-decrypt, `prizeAmountPlain`, reveal-block countdown) surfacing over it; stats are real DOM text, grid is `aria-hidden`, flicker respects `prefers-reduced-motion`. Layout split: root layout is now bare (fonts + providers), dashboard keeps the old `.shell` + `SiteHeader` chrome. Design tokens: #0A0A0A ground, #F5F3EE ink, ember #FF5A33 sole accent, mint #B8F5E6 only on Launch App. No em dashes in copy.
+
+---
+
+**Week 4 / Sepolia deploy.** Deployed + Etherscan-verified: Vault `0xD108…3935`, TicketEngine `0x59B2…2429`, DrawManager `0x2D21…E233` against cUSDCMock `0x7c5B…3639`. Live smoke via Relayer SDK: deposit/withdraw/TVL + draw reveal/`checkIfWon`/prize user-decrypt. Frontend env pointed at these addresses; production build served publicly (Cloudflare quick tunnel). Hardhat mock FHE does not init on Sepolia — use Relayer SDK + explicit gasLimits for live scripts.
 
 ---
 

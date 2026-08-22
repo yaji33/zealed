@@ -1,0 +1,12 @@
+---
+description: Never add Cursor as git co-author; strip Co-authored-by trailers
+alwaysApply: true
+---
+
+# Git authorship — no Cursor co-author
+
+- Never add `Co-authored-by: Cursor` / `cursoragent@cursor.com` (or any Cursor agent identity) to commits.
+- Cursor’s shell may inject that trailer into `git commit` / `git commit-tree`. After any commit made in this environment, verify `git log -1 --format=%B` and strip the trailer via `git hash-object -t commit` + `update-ref` (not `commit-tree`, which is intercepted) before push.
+- Do not present Cursor as a co-author on GitHub or in commit messages unless the user explicitly asks for it.
+- Author commits as the user’s configured git identity only.
+- Only create commits when the user explicitly asks for a commit in that message.

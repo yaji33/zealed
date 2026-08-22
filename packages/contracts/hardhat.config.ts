@@ -11,7 +11,6 @@ import "solidity-coverage";
 
 import "./tasks/accounts";
 
-// Run 'npx hardhat vars setup' to see the list of variables that need to be set
 
 const MNEMONIC: string = vars.get("MNEMONIC", "test test test test test test test test test test test junk");
 const INFURA_API_KEY: string = vars.get("INFURA_API_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
@@ -22,9 +21,12 @@ const config: HardhatUserConfig = {
     deployer: 0,
   },
   etherscan: {
-    apiKey: {
-      sepolia: vars.get("ETHERSCAN_API_KEY", ""),
-    },
+    // Etherscan API V2: single key covers Sepolia + other supported explorers.
+    apiKey: vars.get("ETHERSCAN_API_KEY", ""),
+  },
+  sourcify: {
+    // Sourcify API v1 is in brownout; Etherscan verification is the DoD path.
+    enabled: false,
   },
   gasReporter: {
     currency: "USD",

@@ -27,10 +27,40 @@ const config: Config = {
         inter: ["var(--font-inter)", "system-ui", "sans-serif"],
       },
       borderRadius: {
-        DEFAULT: "4image.pngpx",
+        DEFAULT: "4px",
         panel: "14px",
         card: "10px",
         btn: "999px",
+      },
+      keyframes: {
+        "step-dot-wave": {
+          "0%, 100%": {
+            opacity: "var(--dot-o, 0.8)",
+            transform: "scale(var(--dot-s, 1))",
+          },
+          "50%": {
+            opacity: "calc(var(--dot-o, 0.8) * 0.32)",
+            transform: "scale(calc(var(--dot-s, 1) * 0.62))",
+          },
+        },
+        "step-orbit": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+        "step-orbit-reverse": {
+          from: { transform: "rotate(360deg)" },
+          to: { transform: "rotate(0deg)" },
+        },
+        "step-breathe": {
+          "0%, 100%": { transform: "scale(1)" },
+          "50%": { transform: "scale(1.05)" },
+        },
+      },
+      animation: {
+        "step-dot-wave": "step-dot-wave 2.8s ease-in-out infinite",
+        "step-orbit": "step-orbit 24s linear infinite",
+        "step-orbit-reverse": "step-orbit-reverse 26s linear infinite",
+        "step-breathe": "step-breathe 5s ease-in-out infinite",
       },
     },
   },

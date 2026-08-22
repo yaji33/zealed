@@ -146,7 +146,7 @@ export function AsciiPoolField() {
           : formatCountdown(countdown);
 
   return (
-    <div className="relative py-3">
+    <div className="relative py-2">
       <pre
         className="m-0 overflow-hidden select-none text-center font-mono text-[clamp(7px,1.05vw,12px)] leading-[1.35] tracking-[0.12em] text-ember/50"
         aria-hidden="true"

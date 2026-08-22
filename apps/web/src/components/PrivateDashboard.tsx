@@ -11,6 +11,25 @@ import { addresses, contractsConfigured, OPERATOR_UNTIL } from "@/lib/config";
 import { drawManagerAbi, erc7984Abi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
 import { useFhevm } from "@/lib/fhe";
 import { formatUnits, parseUnits } from "@/lib/format";
+import {
+  bannerClass,
+  bannerOkClass,
+  bannerWarnClass,
+  btnClass,
+  btnSecondaryClass,
+  eyebrowPrivateClass,
+  fieldClass,
+  flowCardClass,
+  ledeClass,
+  monoClass,
+  panelClass,
+  panelPrivateClass,
+  statGridClass,
+  statLabelClass,
+  statNoteClass,
+  statPrivateClass,
+  statValueClass,
+} from "@/lib/uiClasses";
 import type { Hex } from "viem";
 
 type Status = { kind: "idle" | "ok" | "err"; text: string };
@@ -253,6 +272,7 @@ export function PrivateDashboard() {
 
   async function onRevealWin() {
     if (!draw || !fhe.instance || drawId === undefined || !address) return;
+    const fheInstance = fhe.instance;
     await withBusy("Publishing win (tier only)…", async () => {
       const { createPublicClient, http } = await import("viem");
       const { activeChain } = await import("@/lib/config");
@@ -271,9 +291,9 @@ export function PrivateDashboard() {
         throw new Error("No win flag — call checkIfWon first.");
       }
 
-      const decrypted = await fhe.instance.publicDecrypt([handle]);
-      const clear = decrypted.clearValues[handle];
-      const won = clear === true || clear === 1n || clear === 1 || clear === "true";
+      const decrypted = await fheInstance.publicDecrypt([handle]);
+      const clear = decrypted.clearValues[handle] as unknown;
+      const won = clear === true || clear === 1n || clear === 1 || clear === "true" || clear === "1";
       if (!won) {
         throw new Error("Win flag is false — only winners can publish.");
       }
@@ -294,68 +314,88 @@ export function PrivateDashboard() {
 
   if (!isConnected) {
     return (
-      <section className="panel">
-        <p className="eyebrow private-tag">Private</p>
+      <section className={panelClass}>
+        <p className={eyebrowPrivateClass}>Private</p>
         <h2>Wallet required</h2>
-        <p className="lede">Connect to decrypt your position and run deposit / withdraw / check flows.</p>
+        <p className={ledeClass}>
+          Connect to decrypt your position and run deposit / withdraw / check flows.
+        </p>
       </section>
     );
   }
 
+  const statusBannerClass =
+    status.kind === "err" ? bannerWarnClass : status.kind === "ok" ? bannerOkClass : bannerClass;
+
   return (
-    <section className="panel private-panel">
-      <div className="panel-head">
-        <p className="eyebrow private-tag">Private</p>
+    <section className={panelPrivateClass}>
+      <div className="[&_h2]:mb-1 [&_h2]:mt-0.5">
+        <p className={eyebrowPrivateClass}>Private</p>
         <h2>Your confidential position</h2>
-        <p className="lede">
+        <p className={ledeClass}>
           Decryption uses the Relayer SDK user-decrypt / EIP-712 permit flow — client-side only. Nothing
           here is readable without your signature.
         </p>
       </div>
 
       {!configured && (
-        <p className="banner warn">Configure contract addresses in <code>.env.local</code> first.</p>
+        <p className={bannerWarnClass}>
+          Configure contract addresses in <code>.env.local</code> first.
+        </p>
       )}
-      {fhe.error && <p className="banner warn">FHE init: {fhe.error}</p>}
+      {fhe.error && <p className={bannerWarnClass}>FHE init: {fhe.error}</p>}
 
-      <div className="stat-grid">
-        <article className="stat private-surface">
-          <h3>Balance</h3>
-          <p className="stat-value mono">{balance === null ? "••••" : `${formatUnits(balance)} cUSDC`}</p>
+      <div className={statGridClass}>
+        <article className={statPrivateClass}>
+          <h3 className={statLabelClass}>Balance</h3>
+          <p className={`${statValueClass} ${monoClass}`}>
+            {balance === null ? "••••" : `${formatUnits(balance)} cUSDC`}
+          </p>
         </article>
-        <article className="stat private-surface">
-          <h3>TWAB</h3>
-          <p className="stat-value mono">{twab === null ? "••••" : formatUnits(twab)}</p>
+        <article className={statPrivateClass}>
+          <h3 className={statLabelClass}>TWAB</h3>
+          <p className={`${statValueClass} ${monoClass}`}>
+            {twab === null ? "••••" : formatUnits(twab)}
+          </p>
         </article>
-        <article className="stat private-surface">
-          <h3>Ticket weight</h3>
-          <p className="stat-value mono">{weight === null ? "••••" : weight.toString()}</p>
+        <article className={statPrivateClass}>
+          <h3 className={statLabelClass}>Ticket weight</h3>
+          <p className={`${statValueClass} ${monoClass}`}>
+            {weight === null ? "••••" : weight.toString()}
+          </p>
         </article>
-        <article className="stat private-surface">
-          <h3>Pending prize</h3>
-          <p className="stat-value mono">{prize === null ? "••••" : formatUnits(prize)}</p>
+        <article className={statPrivateClass}>
+          <h3 className={statLabelClass}>Pending prize</h3>
+          <p className={`${statValueClass} ${monoClass}`}>
+            {prize === null ? "••••" : formatUnits(prize)}
+          </p>
         </article>
       </div>
 
-      <div className="actions">
-        <button type="button" className="btn" disabled={!privateReady || working} onClick={() => void onDecryptPosition()}>
+      <div className="my-3 flex flex-wrap gap-2.5">
+        <button
+          type="button"
+          className={btnClass}
+          disabled={!privateReady || working}
+          onClick={() => void onDecryptPosition()}
+        >
           Decrypt position
         </button>
       </div>
 
-      <div className="flow-card">
+      <div className={flowCardClass}>
         <h3>1. Approve vault operator</h3>
         <p>
           Explicit step on the cUSDC asset — same shape as ERC-20 <code>approve</code>. Required before the
           vault can pull a deposit.
         </p>
-        <p className="mono small">
+        <p className={`${monoClass} text-[0.85rem]`}>
           Status:{" "}
           {isOperator === undefined ? "…" : isOperator ? "Vault is operator" : "Not approved"}
         </p>
         <button
           type="button"
-          className="btn secondary"
+          className={btnSecondaryClass}
           disabled={!configured || !isConnected || working || Boolean(isOperator)}
           onClick={() => void onSetOperator()}
         >
@@ -363,30 +403,40 @@ export function PrivateDashboard() {
         </button>
       </div>
 
-      <div className="flow-card">
+      <div className={flowCardClass}>
         <h3>2. Deposit</h3>
-        <p>Encrypts the amount for the vault, then calls <code>deposit</code>. Blocked until operator is set.</p>
-        <label className="field">
+        <p>
+          Encrypts the amount for the vault, then calls <code>deposit</code>. Blocked until operator is set.
+        </p>
+        <label className={fieldClass}>
           <span>Amount (cUSDC)</span>
           <input
-            className="mono"
+            className={monoClass}
             value={depositAmount}
             onChange={(e) => setDepositAmount(e.target.value)}
             inputMode="decimal"
           />
         </label>
-        <button type="button" className="btn" disabled={!canDeposit || working} onClick={() => void onDeposit()}>
+        <button
+          type="button"
+          className={btnClass}
+          disabled={!canDeposit || working}
+          onClick={() => void onDeposit()}
+        >
           Deposit
         </button>
       </div>
 
-      <div className="flow-card">
+      <div className={flowCardClass}>
         <h3>3. Withdraw</h3>
-        <p>No lockup — available regardless of draw / freeze state. Oversized requests transfer encrypted zero.</p>
-        <label className="field">
+        <p>
+          No lockup — available regardless of draw / freeze state. Oversized requests transfer encrypted
+          zero.
+        </p>
+        <label className={fieldClass}>
           <span>Amount (cUSDC)</span>
           <input
-            className="mono"
+            className={monoClass}
             value={withdrawAmount}
             onChange={(e) => setWithdrawAmount(e.target.value)}
             inputMode="decimal"
@@ -394,7 +444,7 @@ export function PrivateDashboard() {
         </label>
         <button
           type="button"
-          className="btn"
+          className={btnClass}
           disabled={!privateReady || working}
           onClick={() => void onWithdraw()}
         >
@@ -402,17 +452,17 @@ export function PrivateDashboard() {
         </button>
       </div>
 
-      <div className="flow-card">
+      <div className={flowCardClass}>
         <h3>4. Check draw + claim (decrypt prize)</h3>
         <p>
           Pull-based <code>checkIfWon</code> for draw{" "}
-          <span className="mono">#{drawId?.toString() ?? "—"}</span>. Revealed:{" "}
+          <span className={monoClass}>#{drawId?.toString() ?? "—"}</span>. Revealed:{" "}
           {revealed ? "yes" : "no"}. Already checked: {hasChecked ? "yes" : "no"}.
         </p>
-        <div className="row">
+        <div className="my-3 flex flex-wrap gap-2.5">
           <button
             type="button"
-            className="btn"
+            className={btnClass}
             disabled={!configured || !revealed || Boolean(hasChecked) || working || drawId === undefined}
             onClick={() => void onCheckIfWon()}
           >
@@ -420,18 +470,20 @@ export function PrivateDashboard() {
           </button>
           <button
             type="button"
-            className="btn secondary"
+            className={btnSecondaryClass}
             disabled={!privateReady || working}
             onClick={() => void onDecryptPrize()}
           >
             Decrypt pending prize
           </button>
         </div>
-        <p className="stat-note">
+        <p className={statNoteClass}>
           There is no separate on-chain prize transfer yet — “claim” means decrypting your ACL-gated pending
           prize handle client-side.
         </p>
-        <label className="field row" style={{ alignItems: "center", gap: "0.75rem", marginTop: "1rem" }}>
+        <label
+          className={`${fieldClass} mt-4 flex flex-wrap items-center gap-3`}
+        >
           <input
             type="checkbox"
             checked={revealWinEnabled}
@@ -445,7 +497,7 @@ export function PrivateDashboard() {
         </label>
         <button
           type="button"
-          className="btn secondary"
+          className={btnSecondaryClass}
           disabled={
             !revealWinEnabled ||
             !configured ||
@@ -461,11 +513,7 @@ export function PrivateDashboard() {
         </button>
       </div>
 
-      {(busy || status.text) && (
-        <p className={`banner ${status.kind === "err" ? "warn" : status.kind === "ok" ? "ok" : ""}`}>
-          {busy ?? status.text}
-        </p>
-      )}
+      {(busy || status.text) && <p className={statusBannerClass}>{busy ?? status.text}</p>}
     </section>
   );
 }

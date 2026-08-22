@@ -1,23 +1,26 @@
 import type { Metadata } from "next";
+import { DM_Sans, Fraunces, Inter } from "next/font/google";
 import { Providers } from "@/components/Providers";
-import { SiteHeader } from "@/components/SiteHeader";
 import "./globals.css";
 
+const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans" });
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-fraunces",
+});
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+
 export const metadata: Metadata = {
-  title: "Zealed — confidential prize savings",
+  title: "Zealed",
   description: "No-loss prize savings with encrypted positions on the Zama Protocol.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <Providers>
-          <div className="shell">
-            <SiteHeader />
-            {children}
-          </div>
-        </Providers>
+      <body className={`${dmSans.variable} ${fraunces.variable} ${inter.variable}`}>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

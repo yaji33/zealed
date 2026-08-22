@@ -18,17 +18,17 @@ export const wagmiConfig = createConfig({
   },
 });
 
-function readAddress(key: string): Address | undefined {
-  const value = process.env[key];
-  if (!value || !/^0x[a-fA-F0-9]{40}$/.test(value)) return undefined;
-  return value as Address;
+function readAddress(value: string | undefined): Address | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^0x[a-fA-F0-9]{40}$/.test(trimmed)) return undefined;
+  return trimmed as Address;
 }
 
 export const addresses = {
-  vault: readAddress("NEXT_PUBLIC_VAULT_ADDRESS"),
-  ticketEngine: readAddress("NEXT_PUBLIC_TICKET_ENGINE_ADDRESS"),
-  drawManager: readAddress("NEXT_PUBLIC_DRAW_MANAGER_ADDRESS"),
-  asset: readAddress("NEXT_PUBLIC_ASSET_ADDRESS"),
+  vault: readAddress(process.env.NEXT_PUBLIC_VAULT_ADDRESS),
+  ticketEngine: readAddress(process.env.NEXT_PUBLIC_TICKET_ENGINE_ADDRESS),
+  drawManager: readAddress(process.env.NEXT_PUBLIC_DRAW_MANAGER_ADDRESS),
+  asset: readAddress(process.env.NEXT_PUBLIC_ASSET_ADDRESS),
 } as const;
 
 /** Far-future operator expiry used by vault tests (2^48 - 1), fits uint48 / safe integer. */

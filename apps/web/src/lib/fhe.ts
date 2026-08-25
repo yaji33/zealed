@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useAccount, useWalletClient } from "wagmi";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useAccount, useConfig, useWalletClient } from "wagmi";
+import { getWalletClient } from "@wagmi/core";
 import { bytesToHex, type Address, type Hex, type WalletClient } from "viem";
 import type { FhevmInstance } from "@zama-fhe/relayer-sdk/web";
 
@@ -21,64 +22,92 @@ async function loadSdk() {
   return sdk;
 }
 
+/** Prefetch Relayer SDK + WASM without touching the wallet provider. */
+export async function warmFheSdk(): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    await loadSdk();
+  } catch {
+    // Best-effort warm; real errors surface when the user decrypts or deposits.
+  }
+}
+
 function toHex(value: Uint8Array | Hex): Hex {
   if (typeof value === "string") return value;
   return bytesToHex(value);
 }
 
+function isZeroHandle(handle: Hex): boolean {
+  return !handle || /^0x0+$/i.test(handle);
+}
+
 export function useFhevm() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, connector } = useAccount();
+  const config = useConfig();
   const { data: walletClient } = useWalletClient();
   const [instance, setInstance] = useState<FhevmInstance | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
+  const initPromiseRef = useRef<Promise<FhevmInstance> | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    if (!isConnected) {
+      setInstance(null);
+      setError(null);
+      initPromiseRef.current = null;
+    }
+  }, [isConnected]);
 
-    async function boot() {
-      if (!isConnected || typeof window === "undefined") {
-        setInstance(null);
-        setReady(false);
-        return;
-      }
-      const ethereum = (window as Window & { ethereum?: unknown }).ethereum;
-      if (!ethereum) {
-        setInstance(null);
-        setReady(false);
-        setError("No injected wallet found");
-        return;
-      }
-      try {
-        setError(null);
-        const sdk = await loadSdk();
-        const inst = await sdk.createInstance({
-          ...sdk.SepoliaConfig,
-          network: ethereum as Parameters<typeof sdk.createInstance>[0]["network"],
-        });
-        if (!cancelled) {
-          setInstance(inst);
-          setReady(true);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setInstance(null);
-          setReady(false);
-          setError(err instanceof Error ? err.message : "Failed to init Relayer SDK");
-        }
-      }
+  const ensureInstance = useCallback(async (): Promise<FhevmInstance> => {
+    if (!isConnected || !address) {
+      throw new Error("Wallet not connected");
+    }
+    if (instance) return instance;
+    if (initPromiseRef.current) return initPromiseRef.current;
+
+    const ethereum = (window as Window & { ethereum?: unknown }).ethereum;
+    if (!ethereum) {
+      throw new Error("No injected wallet found");
     }
 
-    void boot();
-    return () => {
-      cancelled = true;
-    };
-  }, [isConnected, address]);
+    initPromiseRef.current = (async () => {
+      setError(null);
+      const sdk = await loadSdk();
+      const inst = await sdk.createInstance({
+        ...sdk.SepoliaConfig,
+        network: ethereum as Parameters<typeof sdk.createInstance>[0]["network"],
+      });
+      setInstance(inst);
+      return inst;
+    })();
+
+    try {
+      return await initPromiseRef.current;
+    } catch (err) {
+      initPromiseRef.current = null;
+      const message = err instanceof Error ? err.message : "Failed to init Relayer SDK";
+      setError(message);
+      throw err;
+    }
+  }, [address, instance, isConnected]);
+
+  const resolveWalletClient = useCallback(async (): Promise<WalletClient> => {
+    if (walletClient) return walletClient;
+
+    // Fall back through the same Config WagmiProvider owns.
+    const fromConfig = await getWalletClient(config, {
+      account: address,
+      connector,
+    });
+    if (fromConfig) return fromConfig;
+
+    throw new Error("Wallet client not available. Disconnect and connect again.");
+  }, [address, config, connector, walletClient]);
 
   const encryptUint64 = useCallback(
     async (contractAddress: Address, amount: bigint): Promise<EncryptResult> => {
-      if (!instance || !address) throw new Error("FHE instance not ready");
-      const input = instance.createEncryptedInput(contractAddress, address);
+      const inst = await ensureInstance();
+      if (!address) throw new Error("Wallet not connected");
+      const input = inst.createEncryptedInput(contractAddress, address);
       input.add64(amount);
       const encrypted = await input.encrypt();
       return {
@@ -86,41 +115,80 @@ export function useFhevm() {
         inputProof: toHex(encrypted.inputProof),
       };
     },
-    [instance, address],
+    [address, ensureInstance],
   );
 
-  const userDecryptEuint64 = useCallback(
-    async (handle: Hex, contractAddress: Address): Promise<bigint> => {
-      if (!instance || !address || !walletClient) throw new Error("Wallet / FHE not ready");
-      if (/^0x0+$/.test(handle)) return 0n;
+  const userDecryptMany = useCallback(
+    async (
+      items: { handle: Hex; contractAddress: Address }[],
+    ): Promise<Record<string, bigint>> => {
+      if (!address) throw new Error("Wallet not connected");
 
-      const keypair = instance.generateKeypair();
+      const actionable = items.filter((item) => !isZeroHandle(item.handle));
+      const out: Record<string, bigint> = {};
+      for (const item of items) {
+        if (isZeroHandle(item.handle)) out[item.handle] = 0n;
+      }
+      if (actionable.length === 0) return out;
+
+      const inst = await ensureInstance();
+      const client = await resolveWalletClient();
+
+      const contracts = [...new Set(actionable.map((item) => item.contractAddress))];
+      const keypair = inst.generateKeypair();
       const startTimestamp = Math.floor(Date.now() / 1000);
       const durationDays = 7;
-      const eip712 = instance.createEIP712(keypair.publicKey, [contractAddress], startTimestamp, durationDays);
-      const signature = await signUserDecryptPermit(walletClient, address, eip712);
+      const eip712 = inst.createEIP712(
+        keypair.publicKey,
+        contracts,
+        startTimestamp,
+        durationDays,
+      );
+      const signature = await signUserDecryptPermit(client, address, eip712);
 
-      const results = await instance.userDecrypt(
-        [{ handle, contractAddress }],
+      const results = await inst.userDecrypt(
+        actionable.map((item) => ({
+          handle: item.handle,
+          contractAddress: item.contractAddress,
+        })),
         keypair.privateKey,
         keypair.publicKey,
         signature.replace(/^0x/, ""),
-        [contractAddress],
+        contracts,
         address,
         startTimestamp,
         durationDays,
       );
 
-      const value = results[handle];
-      if (typeof value === "bigint") return value;
-      if (typeof value === "number") return BigInt(value);
-      if (typeof value === "string") return BigInt(value);
-      throw new Error("Unexpected decrypt result type");
+      for (const item of actionable) {
+        const value = results[item.handle];
+        if (typeof value === "bigint") out[item.handle] = value;
+        else if (typeof value === "number") out[item.handle] = BigInt(value);
+        else if (typeof value === "string") out[item.handle] = BigInt(value);
+        else throw new Error("Unexpected decrypt result type");
+      }
+      return out;
     },
-    [instance, address, walletClient],
+    [address, ensureInstance, resolveWalletClient],
   );
 
-  return { instance, ready, error, encryptUint64, userDecryptEuint64 };
+  const userDecryptEuint64 = useCallback(
+    async (handle: Hex, contractAddress: Address): Promise<bigint> => {
+      const results = await userDecryptMany([{ handle, contractAddress }]);
+      return results[handle] ?? 0n;
+    },
+    [userDecryptMany],
+  );
+
+  return {
+    instance,
+    ready: Boolean(instance),
+    error,
+    initIfNeeded: ensureInstance,
+    encryptUint64,
+    userDecryptEuint64,
+    userDecryptMany,
+  };
 }
 
 async function signUserDecryptPermit(
@@ -149,7 +217,6 @@ async function signUserDecryptPermit(
       chainId: Number(eip712.domain.chainId),
       verifyingContract: eip712.domain.verifyingContract,
     },
-    // viem expects mutable arrays; SDK types are readonly.
     types: rest as Record<string, { name: string; type: string }[]>,
     primaryType: eip712.primaryType,
     message: eip712.message,

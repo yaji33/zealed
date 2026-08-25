@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  experimental: {
+    optimizePackageImports: ["wagmi", "viem", "@tanstack/react-query"],
+  },
   webpack: (config) => {
     // Relayer SDK / tfhe wasm needs these fallbacks in the browser bundle.
     config.resolve.fallback = {

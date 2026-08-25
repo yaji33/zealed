@@ -17,17 +17,17 @@ import {
   bannerWarnClass,
   btnClass,
   btnSecondaryClass,
-  eyebrowPrivateClass,
+  cardClass,
+  cardHighlightClass,
   fieldClass,
   flowCardClass,
   ledeClass,
   monoClass,
-  panelClass,
-  panelPrivateClass,
+  sectionTitleClass,
+  statCardClass,
   statGridClass,
   statLabelClass,
   statNoteClass,
-  statPrivateClass,
   statValueClass,
 } from "@/lib/uiClasses";
 import type { Hex } from "viem";
@@ -105,11 +105,11 @@ export function PrivateDashboard() {
 
   const working = Boolean(busy) || txPending || txConfirming;
 
-  const canDeposit = Boolean(isOperator && fhe.ready && configured && isConnected);
+  const canDeposit = Boolean(isOperator && configured && isConnected);
 
   const privateReady = useMemo(
-    () => isConnected && configured && fhe.ready,
-    [isConnected, configured, fhe.ready],
+    () => isConnected && configured,
+    [isConnected, configured],
   );
 
   async function withBusy(label: string, fn: () => Promise<void>) {
@@ -145,7 +145,7 @@ export function PrivateDashboard() {
   }
 
   async function onDeposit() {
-    if (!vault || !fhe.ready) return;
+    if (!vault) return;
     await withBusy("Encrypting + depositing…", async () => {
       const amount = parseUnits(depositAmount, 6);
       const { handle, inputProof } = await fhe.encryptUint64(vault, amount);
@@ -160,7 +160,7 @@ export function PrivateDashboard() {
   }
 
   async function onWithdraw() {
-    if (!vault || !fhe.ready) return;
+    if (!vault) return;
     await withBusy("Encrypting + withdrawing…", async () => {
       const amount = parseUnits(withdrawAmount, 6);
       const { handle, inputProof } = await fhe.encryptUint64(vault, amount);
@@ -172,48 +172,74 @@ export function PrivateDashboard() {
       });
       setStatus({
         kind: "ok",
-        text: "Withdraw submitted (no lockup — works even during an active draw).",
+        text: "Withdraw submitted. No lockup, even during a draw.",
       });
     });
   }
 
   async function onDecryptPosition() {
-    if (!vault || !tickets || !address || !fhe.ready) return;
-    await withBusy("User-decrypt (EIP-712 permit)…", async () => {
+    if (!configured) {
+      setStatus({ kind: "err", text: "Contract addresses are not configured." });
+      return;
+    }
+    if (!vault || !tickets) {
+      setStatus({ kind: "err", text: "Vault or ticket engine address is missing." });
+      return;
+    }
+    if (!address) {
+      setStatus({ kind: "err", text: "Connect a wallet first." });
+      return;
+    }
+
+    await withBusy("Decrypting position…", async () => {
       const balHandle = (await readHandle(vault, "getBalance")) as Hex;
       const twabHandle = (await readHandle(vault, "getTwab")) as Hex;
-      const bal = await fhe.userDecryptEuint64(balHandle, vault);
-      const tw = await fhe.userDecryptEuint64(twabHandle, vault);
-      setBalance(bal);
-      setTwab(tw);
 
+      const toDecrypt: { handle: Hex; contractAddress: `0x${string}` }[] = [
+        { handle: balHandle, contractAddress: vault },
+        { handle: twabHandle, contractAddress: vault },
+      ];
+
+      let weightHandle: Hex | undefined;
       if (ticketIndex && ticketIndex > 0n) {
         const { createPublicClient, http } = await import("viem");
-        const { activeChain } = await import("@/lib/config");
+        const { activeChain } = await import("@/lib/wagmi.config");
         const client = createPublicClient({
           chain: activeChain,
           transport: http(process.env.NEXT_PUBLIC_RPC_URL),
         });
-        const weightHandle = (await client.readContract({
+        weightHandle = (await client.readContract({
           address: tickets,
           abi: ticketEngineAbi,
           functionName: "getWeight",
           args: [ticketIndex],
           account: address,
         })) as Hex;
-        const w = await fhe.userDecryptEuint64(weightHandle, tickets);
-        setWeight(w);
-      } else {
-        setWeight(0n);
+        toDecrypt.push({ handle: weightHandle, contractAddress: tickets });
       }
 
-      setStatus({ kind: "ok", text: "Position decrypted client-side only." });
+      // Relayer user-decrypt: one EIP-712 permit, then FHE decrypt of all handles.
+      const decrypted = await fhe.userDecryptMany(toDecrypt);
+      const bal = decrypted[balHandle] ?? 0n;
+      const tw = decrypted[twabHandle] ?? 0n;
+      setBalance(bal);
+      setTwab(tw);
+      setWeight(weightHandle ? (decrypted[weightHandle] ?? 0n) : 0n);
+
+      if (bal === 0n && tw === 0n) {
+        setStatus({
+          kind: "ok",
+          text: "Position unsealed. Balance is zero. Deposit to get tickets for the next draw.",
+        });
+      } else {
+        setStatus({ kind: "ok", text: "Position unsealed on this device only." });
+      }
     });
   }
 
   async function readHandle(contract: `0x${string}`, fn: "getBalance" | "getTwab"): Promise<Hex> {
     const { createPublicClient, http } = await import("viem");
-    const { activeChain } = await import("@/lib/config");
+    const { activeChain } = await import("@/lib/wagmi.config");
     const client = createPublicClient({
       chain: activeChain,
       transport: http(process.env.NEXT_PUBLIC_RPC_URL),
@@ -238,16 +264,16 @@ export function PrivateDashboard() {
       await refetchChecked();
       setStatus({
         kind: "ok",
-        text: "checkIfWon mined. Decrypt your pending prize to see the result (zero if you lost).",
+        text: "Check submitted. Decrypt your pending prize to see the result (zero if you lost).",
       });
     });
   }
 
   async function onDecryptPrize() {
-    if (!draw || !fhe.ready) return;
+    if (!draw) return;
     await withBusy("Decrypting pending prize…", async () => {
       const { createPublicClient, http } = await import("viem");
-      const { activeChain } = await import("@/lib/config");
+      const { activeChain } = await import("@/lib/wagmi.config");
       const client = createPublicClient({
         chain: activeChain,
         transport: http(process.env.NEXT_PUBLIC_RPC_URL),
@@ -264,18 +290,18 @@ export function PrivateDashboard() {
         kind: "ok",
         text:
           value === 0n
-            ? "Encrypted zero — you did not win this draw (or have not checked)."
+            ? "Encrypted zero. You did not win this draw, or have not checked yet."
             : "Prize decrypted. Amount stays private to this wallet.",
       });
     });
   }
 
   async function onRevealWin() {
-    if (!draw || !fhe.instance || drawId === undefined || !address) return;
-    const fheInstance = fhe.instance;
+    if (!draw || drawId === undefined || !address) return;
     await withBusy("Publishing win (tier only)…", async () => {
+      const fheInstance = fhe.instance ?? (await fhe.initIfNeeded());
       const { createPublicClient, http } = await import("viem");
-      const { activeChain } = await import("@/lib/config");
+      const { activeChain } = await import("@/lib/wagmi.config");
       const client = createPublicClient({
         chain: activeChain,
         transport: http(process.env.NEXT_PUBLIC_RPC_URL),
@@ -288,14 +314,14 @@ export function PrivateDashboard() {
       })) as Hex;
 
       if (!handle || /^0x0+$/.test(handle)) {
-        throw new Error("No win flag — call checkIfWon first.");
+        throw new Error("No win flag. Call Check if I won first.");
       }
 
       const decrypted = await fheInstance.publicDecrypt([handle]);
       const clear = decrypted.clearValues[handle] as unknown;
       const won = clear === true || clear === 1n || clear === 1 || clear === "true" || clear === "1";
       if (!won) {
-        throw new Error("Win flag is false — only winners can publish.");
+        throw new Error("Win flag is false. Only winners can publish.");
       }
 
       await writeContractAsync({
@@ -313,58 +339,53 @@ export function PrivateDashboard() {
   }
 
   if (!isConnected) {
-    return (
-      <section className={panelClass}>
-        <p className={eyebrowPrivateClass}>Private</p>
-        <h2>Wallet required</h2>
-        <p className={ledeClass}>
-          Connect to decrypt your position and run deposit / withdraw / check flows.
-        </p>
-      </section>
-    );
+    return null;
   }
 
   const statusBannerClass =
     status.kind === "err" ? bannerWarnClass : status.kind === "ok" ? bannerOkClass : bannerClass;
 
   return (
-    <section className={panelPrivateClass}>
-      <div className="[&_h2]:mb-1 [&_h2]:mt-0.5">
-        <p className={eyebrowPrivateClass}>Private</p>
-        <h2>Your confidential position</h2>
-        <p className={ledeClass}>
-          Decryption uses the Relayer SDK user-decrypt / EIP-712 permit flow — client-side only. Nothing
-          here is readable without your signature.
+    <section className={cardClass}>
+      <div className={cardHighlightClass} aria-hidden="true" />
+      <div className="relative">
+        <h2 className={sectionTitleClass}>Your confidential position</h2>
+        <p className={`${ledeClass} mt-2`}>
+          Unseal with your wallet. Nothing here is readable without your signature.
         </p>
       </div>
 
       {!configured && (
         <p className={bannerWarnClass}>
-          Configure contract addresses in <code>.env.local</code> first.
+          Set contract addresses in <code>.env.local</code> first.
         </p>
       )}
-      {fhe.error && <p className={bannerWarnClass}>FHE init: {fhe.error}</p>}
+      {fhe.error && <p className={bannerWarnClass}>Could not start encryption: {fhe.error}</p>}
 
       <div className={statGridClass}>
-        <article className={statPrivateClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Balance</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {balance === null ? "••••" : `${formatUnits(balance)} cUSDC`}
           </p>
         </article>
-        <article className={statPrivateClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>TWAB</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {twab === null ? "••••" : formatUnits(twab)}
           </p>
         </article>
-        <article className={statPrivateClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Ticket weight</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {weight === null ? "••••" : weight.toString()}
           </p>
         </article>
-        <article className={statPrivateClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Pending prize</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {prize === null ? "••••" : formatUnits(prize)}
@@ -372,26 +393,27 @@ export function PrivateDashboard() {
         </article>
       </div>
 
-      <div className="my-3 flex flex-wrap gap-2.5">
+      <div className="relative my-3 flex flex-wrap items-center gap-2.5">
         <button
           type="button"
           className={btnClass}
           disabled={!privateReady || working}
           onClick={() => void onDecryptPosition()}
         >
-          Decrypt position
+          {busy === "Decrypting position…" ? "Decrypting…" : "Decrypt position"}
         </button>
       </div>
+      {(busy || status.text) && (
+        <p className={`${statusBannerClass} mt-0 mb-4`}>{busy ?? status.text}</p>
+      )}
 
       <div className={flowCardClass}>
-        <h3>1. Approve vault operator</h3>
-        <p>
-          Explicit step on the cUSDC asset — same shape as ERC-20 <code>approve</code>. Required before the
-          vault can pull a deposit.
-        </p>
+        <div className={cardHighlightClass} aria-hidden="true" />
+        <h3>1. Approve the vault</h3>
+        <p>Allow the vault to move your cUSDC before you deposit.</p>
         <p className={`${monoClass} text-[0.85rem]`}>
           Status:{" "}
-          {isOperator === undefined ? "…" : isOperator ? "Vault is operator" : "Not approved"}
+          {isOperator === undefined ? "…" : isOperator ? "Approved" : "Not approved"}
         </p>
         <button
           type="button"
@@ -399,15 +421,14 @@ export function PrivateDashboard() {
           disabled={!configured || !isConnected || working || Boolean(isOperator)}
           onClick={() => void onSetOperator()}
         >
-          {isOperator ? "Operator set" : "setOperator(vault, …)"}
+          {isOperator ? "Approved" : "Approve vault"}
         </button>
       </div>
 
       <div className={flowCardClass}>
+        <div className={cardHighlightClass} aria-hidden="true" />
         <h3>2. Deposit</h3>
-        <p>
-          Encrypts the amount for the vault, then calls <code>deposit</code>. Blocked until operator is set.
-        </p>
+        <p>Your amount is encrypted before it reaches the contract. Approve the vault first.</p>
         <label className={fieldClass}>
           <span>Amount (cUSDC)</span>
           <input
@@ -428,11 +449,9 @@ export function PrivateDashboard() {
       </div>
 
       <div className={flowCardClass}>
+        <div className={cardHighlightClass} aria-hidden="true" />
         <h3>3. Withdraw</h3>
-        <p>
-          No lockup — available regardless of draw / freeze state. Oversized requests transfer encrypted
-          zero.
-        </p>
+        <p>No lockup. You can withdraw anytime, including during a draw.</p>
         <label className={fieldClass}>
           <span>Amount (cUSDC)</span>
           <input
@@ -453,11 +472,14 @@ export function PrivateDashboard() {
       </div>
 
       <div className={flowCardClass}>
-        <h3>4. Check draw + claim (decrypt prize)</h3>
+        <div className={cardHighlightClass} aria-hidden="true" />
+        <h3>4. Check draw and claim</h3>
         <p>
-          Pull-based <code>checkIfWon</code> for draw{" "}
-          <span className={monoClass}>#{drawId?.toString() ?? "—"}</span>. Revealed:{" "}
-          {revealed ? "yes" : "no"}. Already checked: {hasChecked ? "yes" : "no"}.
+          Draw <span className={monoClass}>#{drawId?.toString() ?? "—"}</span>
+          {" · "}
+          {revealed ? "settled" : "not settled yet"}
+          {" · "}
+          {hasChecked ? "already checked" : "not checked"}
         </p>
         <div className="my-3 flex flex-wrap gap-2.5">
           <button
@@ -466,7 +488,7 @@ export function PrivateDashboard() {
             disabled={!configured || !revealed || Boolean(hasChecked) || working || drawId === undefined}
             onClick={() => void onCheckIfWon()}
           >
-            checkIfWon()
+            Check if I won
           </button>
           <button
             type="button"
@@ -478,12 +500,9 @@ export function PrivateDashboard() {
           </button>
         </div>
         <p className={statNoteClass}>
-          There is no separate on-chain prize transfer yet — “claim” means decrypting your ACL-gated pending
-          prize handle client-side.
+          Claiming means decrypting your prize on this device. The amount stays private.
         </p>
-        <label
-          className={`${fieldClass} mt-4 flex flex-wrap items-center gap-3`}
-        >
+        <label className={`${fieldClass} mt-4 flex flex-wrap items-center gap-3`}>
           <input
             type="checkbox"
             checked={revealWinEnabled}
@@ -491,7 +510,7 @@ export function PrivateDashboard() {
             disabled={Boolean(alreadyWinRevealed)}
           />
           <span>
-            Reveal that I won (tier only, no amount) — off by default
+            Publish that I won (tier only, no amount)
             {alreadyWinRevealed ? " · already published" : ""}
           </span>
         </label>
@@ -501,7 +520,6 @@ export function PrivateDashboard() {
           disabled={
             !revealWinEnabled ||
             !configured ||
-            !fhe.ready ||
             !hasChecked ||
             Boolean(alreadyWinRevealed) ||
             working ||
@@ -509,11 +527,10 @@ export function PrivateDashboard() {
           }
           onClick={() => void onRevealWin()}
         >
-          revealWin()
+          Publish win
         </button>
       </div>
 
-      {(busy || status.text) && <p className={statusBannerClass}>{busy ?? status.text}</p>}
     </section>
   );
 }

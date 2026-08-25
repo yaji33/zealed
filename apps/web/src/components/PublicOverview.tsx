@@ -6,17 +6,18 @@ import { contractsConfigured } from "@/lib/config";
 import { formatTimestamp, formatUnits } from "@/lib/format";
 import {
   bannerWarnClass,
+  cardClass,
+  cardHighlightClass,
   dataTableClass,
-  eyebrowPublicClass,
   ledeClass,
   monoClass,
-  panelClass,
   pillOkClass,
   pillPendingClass,
+  sectionTitleClass,
+  statCardClass,
   statGridClass,
   statLabelClass,
   statNoteClass,
-  statPublicClass,
   statValueClass,
 } from "@/lib/uiClasses";
 
@@ -34,24 +35,24 @@ export function PublicOverview() {
   const { data: vaultTvl, isLoading: tvlLoading, isError: tvlError } = useVaultTvl();
 
   return (
-    <section className={panelClass}>
-      <div className="[&_h2]:mb-1 [&_h2]:mt-0.5 [&_h3]:mb-1 [&_h3]:mt-0.5">
-        <p className={eyebrowPublicClass}>Public</p>
-        <h2>Protocol aggregates</h2>
-        <p className={ledeClass}>
-          These figures are visible without a wallet. Individual balances, odds, and outcomes stay encrypted.
+    <section className={cardClass}>
+      <div className={cardHighlightClass} aria-hidden="true" />
+      <div className="relative">
+        <h2 className={sectionTitleClass}>Protocol aggregates</h2>
+        <p className={`${ledeClass} mt-2`}>
+          Visible without a wallet. Individual balances and outcomes stay sealed.
         </p>
       </div>
 
       {!configured && (
         <p className={bannerWarnClass}>
-          Contract addresses are not configured. Set <code>NEXT_PUBLIC_*</code> addresses in{" "}
-          <code>.env.local</code> (see <code>.env.example</code>).
+          Set contract addresses in <code>.env.local</code> first.
         </p>
       )}
 
       <div className={statGridClass}>
-        <article className={statPublicClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Vault TVL</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {!configured
@@ -62,57 +63,53 @@ export function PublicOverview() {
                   ? "Unavailable"
                   : `${formatUnits(vaultTvl ?? 0n)} cUSDC`}
           </p>
-          <p className={statNoteClass}>
-            Aggregate vault total via public self-relay decrypt. Per-user balances stay private.
-          </p>
+          <p className={statNoteClass}>Pool total. Per-user balances stay private.</p>
         </article>
-        <article className={statPublicClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Total yield generated</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {formatUnits(totalYieldGenerated)} cUSDC
           </p>
-          <p className={statNoteClass}>Sum of settled draw prize amounts (yield → prizes).</p>
+          <p className={statNoteClass}>Yield that funded settled prizes.</p>
         </article>
-        <article className={statPublicClass}>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
           <h3 className={statLabelClass}>Total prizes paid</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {formatUnits(totalPrizesPaid)} cUSDC
           </p>
-          <p className={statNoteClass}>
-            From on-chain <code>DrawRevealed</code> / committed prize sizes.
-          </p>
+          <p className={statNoteClass}>Sum of public prize sizes from settled draws.</p>
         </article>
-        <article className={statPublicClass}>
-          <h3 className={statLabelClass}>Public ticket supply</h3>
+        <article className={statCardClass}>
+          <div className={cardHighlightClass} aria-hidden="true" />
+          <h3 className={statLabelClass}>Ticket supply</h3>
           <p className={`${statValueClass} ${monoClass}`}>
             {revealed && totalTicketsPlain !== undefined ? totalTicketsPlain.toString() : "—"}
           </p>
           <p className={statNoteClass}>
-            Plaintext only after draw reveal (same disclosure class as TVL). Current draw{" "}
-            {drawId !== undefined ? `#${drawId.toString()}` : "—"}.
+            Public after reveal. Draw {drawId !== undefined ? `#${drawId.toString()}` : "—"}.
           </p>
         </article>
       </div>
 
-      <div className="mt-6 overflow-x-auto">
-        <div className="mb-3 [&_h3]:mb-1 [&_h3]:mt-0.5">
-          <h3>Draw history</h3>
-          <p className={`${ledeClass} text-[0.92rem]`}>
-            Draw number, time, settled — no individual winners or amounts per user.
-          </p>
-        </div>
+      <div className="relative mt-6 overflow-x-auto">
+        <h3 className="m-0 font-fraunces text-[1.1rem] font-medium text-ink">Draw history</h3>
+        <p className={`${ledeClass} mt-1 text-[0.88rem]`}>
+          Draw number, time, and whether it settled. No individual results.
+        </p>
         {historyLoading ? (
-          <p className="text-muted">Loading draws…</p>
+          <p className="mt-4 text-muted">Loading draws…</p>
         ) : history.length === 0 ? (
-          <p className="text-muted">No draws committed yet.</p>
+          <p className="mt-4 text-muted">No draws committed yet.</p>
         ) : (
-          <table className={dataTableClass}>
+          <table className={`${dataTableClass} mt-4`}>
             <thead>
               <tr>
                 <th>Draw</th>
                 <th>Committed</th>
                 <th>Reveal block</th>
-                <th>Prize (public)</th>
+                <th>Prize</th>
                 <th>Settled</th>
               </tr>
             </thead>

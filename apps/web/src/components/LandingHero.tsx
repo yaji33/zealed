@@ -2,12 +2,20 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import Link from "next/link";
+import { useEffect } from "react";
 import { AsciiPoolField } from "@/components/AsciiPoolField";
 import { AnchorLink } from "@/components/motion/AnchorLink";
+import { LaunchAppLink } from "@/components/LaunchAppLink";
+import { prefetchApp } from "@/lib/prefetchApp";
 import { revealEase } from "@/lib/motionPresets";
 
 export function LandingHero() {
   const reduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => prefetchApp(), 1200);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const headlineVariants = {
     hidden: { opacity: 0, y: 24 },
@@ -34,12 +42,9 @@ export function LandingHero() {
           <span className="text-ink/55" aria-hidden="true">
             |
           </span>
-          <Link
-            href="/dashboard"
-            className="rounded bg-mint px-[1.15rem] py-[0.55rem] font-medium text-void"
-          >
+          <LaunchAppLink className="rounded bg-mint px-[1.15rem] py-[0.55rem] font-medium text-void">
             Launch App
-          </Link>
+          </LaunchAppLink>
         </nav>
       </header>
 

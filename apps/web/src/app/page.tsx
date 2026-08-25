@@ -1,8 +1,8 @@
 import Image from "next/image";
-import Link from "next/link";
 import heroBg from "@/assets/hero-bg.png";
 import { HowItWorksSection } from "@/components/HowItWorksSection";
 import { LandingHero } from "@/components/LandingHero";
+import { LaunchAppLink } from "@/components/LaunchAppLink";
 import { AnchorLink } from "@/components/motion/AnchorLink";
 import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
 import { StaggerGrid, StaggerItem } from "@/components/motion/StaggerGrid";
@@ -139,7 +139,7 @@ export default function HomePage() {
             <AnchorLink href="#visible-vs-sealed">Visible vs sealed</AnchorLink>
             <AnchorLink href="#contracts">The contracts</AnchorLink>
             <AnchorLink href="#faq">FAQ</AnchorLink>
-            <Link href="/dashboard">Launch app</Link>
+            <LaunchAppLink>Launch app</LaunchAppLink>
           </nav>
         </div>
         <p className="mt-12 text-[0.82rem] text-muted">

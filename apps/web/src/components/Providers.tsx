@@ -1,16 +1,25 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
 import { useState, type ReactNode } from "react";
-import { wagmiConfig } from "@/lib/config";
+import { WagmiProvider } from "wagmi";
+import { AppLoadingOverlay } from "@/components/AppLoadingOverlay";
+import { getWagmiConfig } from "@/lib/wagmi.config";
 
-export function Providers({ children }: { children: ReactNode }) {
+type ProvidersProps = {
+  children: ReactNode;
+};
+
+export function Providers({ children }: ProvidersProps) {
+  const [config] = useState(() => getWagmiConfig());
   const [queryClient] = useState(() => new QueryClient());
 
   return (
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <WagmiProvider config={config} reconnectOnMount={false}>
+      <QueryClientProvider client={queryClient}>
+        <AppLoadingOverlay />
+        {children}
+      </QueryClientProvider>
     </WagmiProvider>
   );
 }

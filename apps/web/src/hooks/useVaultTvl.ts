@@ -5,17 +5,7 @@ import { usePublicClient } from "wagmi";
 import type { Hex } from "viem";
 import { addresses } from "@/lib/config";
 import { vaultAbi } from "@/lib/abi/zealed";
-
-let sdkInitPromise: Promise<boolean> | null = null;
-
-async function loadSdk() {
-  const sdk = await import("@zama-fhe/relayer-sdk/web");
-  if (!sdkInitPromise) {
-    sdkInitPromise = sdk.initSDK();
-  }
-  await sdkInitPromise;
-  return sdk;
-}
+import { getFhevmInstance } from "@/lib/relayerSdk";
 
 /**
  * Public self-relay decrypt of ConfidentialVault.totalDeposits (aggregate TVL).
@@ -40,13 +30,7 @@ export function useVaultTvl() {
 
       if (!handle || /^0x0+$/.test(handle)) return 0n;
 
-      const sdk = await loadSdk();
-      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL ?? "https://rpc.sepolia.org";
-      const instance = await sdk.createInstance({
-        ...sdk.SepoliaConfig,
-        network: rpcUrl,
-      });
-
+      const instance = await getFhevmInstance();
       const result = await instance.publicDecrypt([handle]);
       const value = result.clearValues[handle];
       if (typeof value === "bigint") return value;

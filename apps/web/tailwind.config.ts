@@ -6,8 +6,11 @@ const config: Config = {
     extend: {
       colors: {
         void: "#0a0a0a",
+        base: "#111113",
+        surface: "#232325",
+        edge: "#2F2F31",
         ink: "#f5f3ee",
-        muted: "rgba(245, 243, 238, 0.6)",
+        muted: "rgba(245, 243, 238, 0.65)",
         line: "rgba(245, 243, 238, 0.14)",
         ember: "#ff5a33",
         mint: "#b8f5e6",

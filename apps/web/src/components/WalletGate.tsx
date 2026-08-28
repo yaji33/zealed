@@ -1,18 +1,17 @@
 "use client";
 
 import { useConnectWallet } from "@/hooks/useConnectWallet";
-import { cardClass, cardHighlightClass } from "@/lib/uiClasses";
+import { cardClass } from "@/lib/uiClasses";
 
 export function WalletGate() {
   const { connectWallet, canConnect, isPending, error, connector } = useConnectWallet();
 
   return (
     <section className={`${cardClass} px-8 py-14 text-center sm:px-12`}>
-      <div className={cardHighlightClass} aria-hidden="true" />
       <p className="relative m-0 font-mono text-[0.68rem] tracking-[0.18em] text-ember/75">
         APP
       </p>
-      <h1 className="relative mt-4 font-fraunces text-[clamp(1.75rem,3.5vw,2.4rem)] font-medium tracking-tight text-ink">
+      <h1 className="relative mt-4 font-dm-sans text-[clamp(1.75rem,3.5vw,2.4rem)] font-medium tracking-tight text-ink">
         Connect to enter
       </h1>
       <p className="relative mx-auto mt-4 max-w-[28rem] text-[1rem] leading-relaxed text-muted">

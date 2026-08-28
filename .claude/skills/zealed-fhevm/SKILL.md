@@ -163,7 +163,7 @@ Sepolia only for this bounty (per `build-brief.md`). Inherit `SepoliaConfig`, ne
 
 ## 7 — Frontend styling (`apps/web`)
 
-Tailwind v4 utilities in JSX are the standard for all UI in `apps/web`. Design tokens live in `tailwind.config.ts` (`void`, `ink`, `ember`, `mint`, `muted`, `line`, plus dashboard semantics `elevated`, `soft`, `accent`, `public`, `private`, `danger`, `ok`). Use `bg-void`, `text-ember`, `border-line`, `font-mono`, etc. — not ad-hoc hex in components.
+Tailwind v4 utilities in JSX are the standard for all UI in `apps/web`. Design tokens live in `tailwind.config.ts` (`void` landing ground, `base` in-app ground `#111113`, `surface` card fill `#232325`, `edge` card border `#2F2F31`, `ink`, `ember`, `mint`, `muted`, `line`, plus dashboard semantics `elevated`, `soft`, `accent`, `public`, `private`, `danger`, `ok`). Use `bg-base`, `bg-surface`, `border-edge`, `text-ember`, `border-line`, `font-mono`, etc. — not ad-hoc hex in components.
 
 `globals.css` is **tokens and resets only**: `@import "tailwindcss"`, `@config`, Google Fonts import, base-layer resets (`html`, `body`, `a`, `code`). No bespoke component classes (`.landing-*`, `.panel`, `.btn`, …). Dashboard panels/buttons that repeat long class strings may import shared constants from `src/lib/uiClasses.ts`; do not add new named classes to `globals.css` to work around Tailwind.
 
@@ -177,6 +177,31 @@ Dot-matrix / ASCII art (`AsciiPoolField`): rendering logic stays in TS; only out
 ## 9 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Frontend — dashboard tab bar affordance.**
+Position action tabs are left-aligned with `gap-7` (not `flex-1`). Active tab uses a 2px ember underline under the label plus `text-ink`; inactive stay `text-muted` with hover brighten and a faint ember underline. Hairline `border-line` under the row. Panel content unchanged.
+
+---
+
+**Frontend — dashboard action tabs.**
+Replaced the four stacked approve/deposit/withdraw/claim cards with one `rounded-2xl` surface card (`Deposit` / `Withdraw` / `Claim`). Default tab is Claim when the wallet has an unchecked settled draw, else Deposit. Approve is a blocking step on Deposit until `setOperator` lands, then a one-line "Vault approved" row. Claim uses the full check/decrypt flow only when there is work; otherwise a quiet empty state. Tab panels stay mounted (`hidden`), so balance/approval queries are not refetched on switch. Faucet unchanged.
+
+---
+
+**Frontend — in-app base/surface tokens.**
+`base` `#111113` (in-app page) and `surface` `#232325` (flat card fill) in `tailwind.config.ts`. Dashboard/faucet use `bg-base`; `uiClasses` cards drop the `#1a1a1a→#0f0f0f` gradient for `bg-surface`. Landing stays on `void`. `muted` 0.60→0.65 for ink on surface. Section 7 updated.
+
+---
+
+**Frontend — faucet two-column layout.**
+Get cUSDC card is steps left / status panel right (flow status, folded Wrapped metric). Stepper rail is 2px with fill, larger markers, check on complete. Stacks below `lg`. `/faucet` redirects to `/dashboard/faucet`.
+
+---
+
+**Frontend — faucet route + connected stepper.**
+Moved mint/approve/wrap off `/dashboard` onto `/dashboard/faucet`. In-app nav: Home/App replaced by Faucet (LandingHero sizing kept). Single-card stepper with filling rail, locked future steps, mint stamp animation slot (image/Lottie/SVG, SVG fallback), wrapped total from underlying Transfer logs (not local-only). Dashboard deposit flow unchanged.
 
 ---
 
@@ -226,6 +251,17 @@ Patterns promoted into Section 3:
 - Vault wiring followed in a separate commit: see "vault ↔ TicketEngine wiring" entry above.
 
 Next: Week 3 frontend.
+
+---
+
+**Frontend — in-app cUSDC faucet.**
+Dashboard `CusdcFaucetCard`: mint mock USDC (`0x9b5C…DFfF`) → `approve` cUSDCMock (`0x7c5B…3639`) → `wrap`, matching `smoke-sepolia.ts` / Zama Sepolia protocol-apps addresses. Documented in root README. Relayer SDK does not expose wrapper addresses; sourced from existing smoke script + docs.
+
+**Frontend — Relayer SDK single-flight init.**
+`initSDK` has no internal lock; parallel calls from `useVaultTvl` + `useFhevm` raced and surfaced tfhe `unwrap_throw` on decrypt. Shared `lib/relayerSdk.ts` owns one init + one `createInstance` (HTTP RPC for host chain).
+
+**DrawManager guards + Sepolia redeploy (full trio).**
+`MIN_REVEAL_DELAY=5`, `MIN_DRAW_INTERVAL=20 minutes`, `lastCommitTimestamp`. Kept post-reveal freeze (path b): `checkIfWon` reads live Fenwick weights, so auto-unfreeze on reveal would let ranges expand against finalized `r`. `deploy-sepolia.ts` redeploys vault+tickets+draw (history resets). New addresses in `deployments/sepolia.json` / web env / README. Dashboard three-state draw pool line.
 
 ---
 

@@ -34,7 +34,8 @@ async function main() {
   console.log("drawId", drawId.toString(), "revealed", revealed);
 
   if (drawId === 0n || revealed) {
-    const target = (await ethers.provider.getBlockNumber()) + 3;
+    const minDelay = Number(await draw.MIN_REVEAL_DELAY());
+    const target = (await ethers.provider.getBlockNumber()) + minDelay + 1;
     await (await draw.commitDraw(target, 1000n, { gasLimit: 1_500_000n })).wait();
     drawId = await draw.drawId();
     console.log("committed draw", drawId.toString(), "revealBlock", target);

@@ -21,8 +21,13 @@ import {TicketEngine} from "./TicketEngine.sol";
  *      or substituted.
  */
 contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
-    /// @notice Minimum blocks between commit and the randomness source block.
-    uint256 public constant MIN_REVEAL_DELAY = 2;
+    /// @notice Minimum blocks between commit and the randomness source block (~1 min on Sepolia).
+    /// @dev Demo-scaled; production would use a larger gap. Separate from MIN_DRAW_INTERVAL.
+    uint256 public constant MIN_REVEAL_DELAY = 5;
+
+    /// @notice Minimum wall-clock gap between successive commits (20 minutes, Sepolia demo scale).
+    /// @dev Production would use a longer cadence (e.g. daily). Enforced from the prior commit timestamp.
+    uint256 public constant MIN_DRAW_INTERVAL = 20 minutes;
 
     /// @notice blockhash is only available for the most recent 256 blocks.
     uint256 public constant MAX_REVEAL_WINDOW = 256;
@@ -41,6 +46,9 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
 
     /// @notice Future block whose hash seeds `r`.
     uint256 public revealBlock;
+
+    /// @notice Timestamp of the most recent `commitDraw` (0 before the first commit).
+    uint256 public lastCommitTimestamp;
 
     /// @notice Plaintext total tickets used to bound `r` (set at reveal after public decrypt).
     uint64 public totalTicketsPlain;
@@ -81,6 +89,7 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     error DrawAlreadyRevealed();
     error DrawNotRevealed();
     error InvalidRevealBlock();
+    error DrawIntervalNotElapsed();
     error RevealTooEarly();
     error RevealTooLate();
     error ZeroTotalTickets();
@@ -114,6 +123,10 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         // Allow a new commit only from idle (no open commit) or after the prior draw revealed.
         if (drawId != 0 && !revealed) revert DrawPendingReveal();
 
+        if (lastCommitTimestamp != 0 && block.timestamp < lastCommitTimestamp + MIN_DRAW_INTERVAL) {
+            revert DrawIntervalNotElapsed();
+        }
+
         if (ticketEngine.frozen()) {
             ticketEngine.setFrozen(false);
         }
@@ -126,6 +139,7 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         totalTicketsPlain = 0;
         prizeAmountPlain = prizeAmount;
         revealBlock = revealBlock_;
+        lastCommitTimestamp = block.timestamp;
 
         ticketEngine.setFrozen(true);
         ticketEngine.makeTotalPubliclyDecryptable();
@@ -254,7 +268,10 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
 
     /**
      * @notice Re-opens TicketEngine weight syncs after the current draw has been revealed.
-     * @dev Optional; the next `commitDraw` also unfreezes before re-freezing.
+     * @dev Kept separate from `revealDraw` on purpose: `checkIfWon` reads live Fenwick weights,
+     *      so unfreezing immediately after reveal would let a user inflate their range against
+     *      an already-finalized `r`. Call this (permissionless) after the claim window, or let
+     *      the next `commitDraw` unfreeze-then-refreeze.
      */
     function unfreezeWeights() external {
         if (!revealed) revert DrawNotRevealed();

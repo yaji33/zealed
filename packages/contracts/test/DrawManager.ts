@@ -72,7 +72,9 @@ describe("DrawManager", function () {
     engine: TicketEngine = tickets,
     manager: DrawManager = draw,
   ): Promise<{ drawId: bigint; r: bigint; total: bigint }> {
-    const target = (await ethers.provider.getBlockNumber()) + 3;
+    const delay = Number(await manager.MIN_REVEAL_DELAY());
+    // +1: the commit tx itself mines a new block, so on-chain block.number is last+1.
+    const target = (await ethers.provider.getBlockNumber()) + delay + 1;
     await (await manager.commitDraw(target, PRIZE)).wait();
 
     while ((await ethers.provider.getBlockNumber()) <= target) {
@@ -155,10 +157,15 @@ describe("DrawManager", function () {
     await syncWeight(tickets, ticketsAddress, signers.alice, 100);
 
     const now = await ethers.provider.getBlockNumber();
+    const minDelay = Number(await draw.MIN_REVEAL_DELAY());
     await expect(draw.commitDraw(now, PRIZE)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
     await expect(draw.commitDraw(now + 1, PRIZE)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
+    await expect(draw.commitDraw(now + minDelay - 1, PRIZE)).to.be.revertedWithCustomError(
+      draw,
+      "InvalidRevealBlock",
+    );
 
-    const target = now + 5;
+    const target = (await ethers.provider.getBlockNumber()) + minDelay + 1;
     await (await draw.commitDraw(target, PRIZE)).wait();
 
     // Cannot reveal early — committer cannot grind a favorable hash immediately.
@@ -186,9 +193,11 @@ describe("DrawManager", function () {
     // After the 256-block window, reveal is rejected (hash unavailable).
     const late = await deployFixture();
     await syncWeight(late.tickets, late.ticketsAddress, signers.alice, 100);
-    const lateTarget = (await ethers.provider.getBlockNumber()) + 3;
+    const lateDelay = Number(await late.draw.MIN_REVEAL_DELAY());
+    const lateTarget = (await ethers.provider.getBlockNumber()) + lateDelay + 1;
     await (await late.draw.commitDraw(lateTarget, PRIZE)).wait();
-    for (let i = 0; i < 260; i++) {
+    // Exhaust the 256-block hash window past revealBlock (not just past commit).
+    for (let i = 0; i < lateDelay + 260; i++) {
       await ethers.provider.send("evm_mine", []);
     }
     const lateHandle = await late.tickets.totalTickets();
@@ -198,6 +207,31 @@ describe("DrawManager", function () {
       late.draw,
       "RevealTooLate",
     );
+  });
+
+  it("enforces MIN_DRAW_INTERVAL between successive commits", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    await commitAndReveal();
+
+    const delay = Number(await draw.MIN_REVEAL_DELAY());
+    const tooSoon = (await ethers.provider.getBlockNumber()) + delay + 1;
+    await expect(draw.commitDraw(tooSoon, PRIZE)).to.be.revertedWithCustomError(draw, "DrawIntervalNotElapsed");
+
+    const interval = Number(await draw.MIN_DRAW_INTERVAL());
+    await ethers.provider.send("evm_increaseTime", [interval]);
+    await ethers.provider.send("evm_mine", []);
+
+    const nextTarget = (await ethers.provider.getBlockNumber()) + delay + 1;
+    await expect(draw.commitDraw(nextTarget, PRIZE)).to.not.be.reverted;
+  });
+
+  it("keeps weights frozen after reveal until unfreezeWeights", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    await commitAndReveal();
+    expect(await tickets.frozen()).to.eq(true);
+
+    await (await draw.unfreezeWeights()).wait();
+    expect(await tickets.frozen()).to.eq(false);
   });
 
   it("hasChecked prevents a second checkIfWon for the same draw", async function () {

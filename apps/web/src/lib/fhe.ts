@@ -1,35 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAccount, useConfig, useWalletClient } from "wagmi";
 import { getWalletClient } from "@wagmi/core";
 import { bytesToHex, type Address, type Hex, type WalletClient } from "viem";
 import type { FhevmInstance } from "@zama-fhe/relayer-sdk/web";
+import { getFhevmInstance, warmRelayerSdk } from "@/lib/relayerSdk";
 
 type EncryptResult = {
   handle: Hex;
   inputProof: Hex;
 };
 
-let sdkInitPromise: Promise<boolean> | null = null;
-
-async function loadSdk() {
-  const sdk = await import("@zama-fhe/relayer-sdk/web");
-  if (!sdkInitPromise) {
-    sdkInitPromise = sdk.initSDK();
-  }
-  await sdkInitPromise;
-  return sdk;
-}
-
 /** Prefetch Relayer SDK + WASM without touching the wallet provider. */
 export async function warmFheSdk(): Promise<void> {
-  if (typeof window === "undefined") return;
-  try {
-    await loadSdk();
-  } catch {
-    // Best-effort warm; real errors surface when the user decrypts or deposits.
-  }
+  await warmRelayerSdk();
 }
 
 function toHex(value: Uint8Array | Hex): Hex {
@@ -41,19 +26,25 @@ function isZeroHandle(handle: Hex): boolean {
   return !handle || /^0x0+$/i.test(handle);
 }
 
+function formatFheError(err: unknown): string {
+  const message = err instanceof Error ? err.message : "Failed to init Relayer SDK";
+  if (/unwrap_throw/i.test(message)) {
+    return "Encryption WASM failed to start (often a double-init race). Hard-refresh the page and try Decrypt again.";
+  }
+  return message;
+}
+
 export function useFhevm() {
   const { address, isConnected, connector } = useAccount();
   const config = useConfig();
   const { data: walletClient } = useWalletClient();
   const [instance, setInstance] = useState<FhevmInstance | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const initPromiseRef = useRef<Promise<FhevmInstance> | null>(null);
 
   useEffect(() => {
     if (!isConnected) {
       setInstance(null);
       setError(null);
-      initPromiseRef.current = null;
     }
   }, [isConnected]);
 
@@ -62,38 +53,22 @@ export function useFhevm() {
       throw new Error("Wallet not connected");
     }
     if (instance) return instance;
-    if (initPromiseRef.current) return initPromiseRef.current;
-
-    const ethereum = (window as Window & { ethereum?: unknown }).ethereum;
-    if (!ethereum) {
-      throw new Error("No injected wallet found");
-    }
-
-    initPromiseRef.current = (async () => {
-      setError(null);
-      const sdk = await loadSdk();
-      const inst = await sdk.createInstance({
-        ...sdk.SepoliaConfig,
-        network: ethereum as Parameters<typeof sdk.createInstance>[0]["network"],
-      });
-      setInstance(inst);
-      return inst;
-    })();
 
     try {
-      return await initPromiseRef.current;
+      setError(null);
+      const inst = await getFhevmInstance();
+      setInstance(inst);
+      return inst;
     } catch (err) {
-      initPromiseRef.current = null;
-      const message = err instanceof Error ? err.message : "Failed to init Relayer SDK";
+      const message = formatFheError(err);
       setError(message);
-      throw err;
+      throw new Error(message, { cause: err });
     }
   }, [address, instance, isConnected]);
 
   const resolveWalletClient = useCallback(async (): Promise<WalletClient> => {
     if (walletClient) return walletClient;
 
-    // Fall back through the same Config WagmiProvider owns.
     const fromConfig = await getWalletClient(config, {
       account: address,
       connector,

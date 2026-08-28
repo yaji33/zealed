@@ -1,6 +1,7 @@
 export function prefetchDashboardChunks(): void {
   void import("@/components/PrivateDashboard");
   void import("@/components/PublicOverview");
+  void import("@/components/FaucetApp");
 }
 
 export function warmFheSdk(): void {

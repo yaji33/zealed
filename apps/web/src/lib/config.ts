@@ -1,1 +1,1 @@
-export { addresses, contractsConfigured, OPERATOR_UNTIL } from "./addresses";
+export { addresses, contractsConfigured, faucetConfigured, OPERATOR_UNTIL } from "./addresses";

@@ -49,9 +49,9 @@ export const actionTabListClass =
   "relative m-0 flex list-none items-end gap-7 border-b border-line px-5";
 
 export const actionTabClass =
-  "relative cursor-pointer appearance-none rounded-none border-0 bg-transparent px-0 pb-3 pt-3.5 font-dm-sans text-[0.92rem] font-medium text-muted transition-colors after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-transparent after:content-[''] after:transition-colors hover:text-ink [&:not([aria-selected='true'])]:hover:after:bg-ember/40";
+  "relative inline-flex items-center gap-1.5 cursor-pointer appearance-none rounded-none border-0 bg-transparent px-0 pb-3 pt-3.5 font-dm-sans text-[0.92rem] font-medium text-muted transition-colors after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-transparent after:content-[''] after:transition-colors [&:not([aria-selected='true'])]:hover:text-ink [&:not([aria-selected='true'])]:hover:after:bg-ember/40";
 
-export const actionTabActiveClass = "text-ink after:bg-ember";
+export const actionTabActiveClass = "text-ember after:bg-ember";
 
 export const actionPanelClass =
   "relative p-5 [&_h3]:relative [&_h3]:mb-1 [&_h3]:mt-0 [&_h3]:font-dm-sans [&_h3]:text-[1.1rem] [&_h3]:font-medium [&_p]:relative [&_p]:mb-3 [&_p]:mt-0 [&_p]:text-[0.88rem] [&_p]:leading-relaxed [&_p]:text-muted";

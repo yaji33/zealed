@@ -1,5 +1,8 @@
 "use client";
 
+import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
+import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
+import RedeemOutlined from "@mui/icons-material/RedeemOutlined";
 import { useMemo, useState, type KeyboardEvent } from "react";
 import {
   useAccount,
@@ -37,11 +40,12 @@ import type { Hex } from "viem";
 
 type Status = { kind: "idle" | "ok" | "err"; text: string };
 type ActionTab = "deposit" | "withdraw" | "claim";
+type TabIcon = typeof ArrowDownwardOutlined;
 
-const ACTION_TABS: { id: ActionTab; label: string }[] = [
-  { id: "deposit", label: "Deposit" },
-  { id: "withdraw", label: "Withdraw" },
-  { id: "claim", label: "Claim" },
+const ACTION_TABS: { id: ActionTab; label: string; Icon: TabIcon }[] = [
+  { id: "deposit", label: "Deposit", Icon: ArrowDownwardOutlined },
+  { id: "withdraw", label: "Withdraw", Icon: ArrowUpwardOutlined },
+  { id: "claim", label: "Claim", Icon: RedeemOutlined },
 ];
 
 export function PrivateDashboard() {
@@ -503,6 +507,12 @@ export function PrivateDashboard() {
                 className={`${actionTabClass} ${selected ? actionTabActiveClass : ""}`}
                 onClick={() => selectTab(tab.id)}
               >
+                <tab.Icon
+                  aria-hidden="true"
+                  className="shrink-0"
+                  htmlColor="currentColor"
+                  style={{ fontSize: 17 }}
+                />
                 {tab.label}
               </button>
             );
@@ -520,7 +530,7 @@ export function PrivateDashboard() {
           role="tabpanel"
           aria-labelledby="action-tab-deposit"
           hidden={activeTab !== "deposit"}
-          className={actionPanelClass}
+          className={`${actionPanelClass} ${activeTab === "deposit" ? "" : "hidden"}`}
         >
           {vaultApproved ? (
             <>
@@ -577,7 +587,7 @@ export function PrivateDashboard() {
           role="tabpanel"
           aria-labelledby="action-tab-withdraw"
           hidden={activeTab !== "withdraw"}
-          className={actionPanelClass}
+          className={`${actionPanelClass} ${activeTab === "withdraw" ? "" : "hidden"}`}
         >
           <p>No lockup. You can withdraw anytime, including during a draw.</p>
           <label className={fieldClass}>
@@ -604,7 +614,7 @@ export function PrivateDashboard() {
           role="tabpanel"
           aria-labelledby="action-tab-claim"
           hidden={activeTab !== "claim"}
-          className={actionPanelClass}
+          className={`${actionPanelClass} ${activeTab === "claim" ? "" : "hidden"}`}
         >
           {claimQuiet ? (
             <p className="!mb-0">

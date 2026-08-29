@@ -180,6 +180,11 @@ Append here after each module ships. Newest entry on top. See Maintenance Protoc
 
 ---
 
+**Frontend — dashboard tab icons.**
+Deposit / Withdraw / Claim tabs use `@mui/icons-material` Outlined set (`ArrowDownwardOutlined`, `ArrowUpwardOutlined`, `RedeemOutlined`; confirmed in v9.4.0). Icons inherit the tab `text-muted` / `text-ink` color, 17px, 6px gap. Underline, spacing, and panels unchanged.
+
+---
+
 **Frontend — dashboard tab bar affordance.**
 Position action tabs are left-aligned with `gap-7` (not `flex-1`). Active tab uses a 2px ember underline under the label plus `text-ink`; inactive stay `text-muted` with hover brighten and a faint ember underline. Hairline `border-line` under the row. Panel content unchanged.
 

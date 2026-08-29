@@ -180,6 +180,26 @@ Append here after each module ships. Newest entry on top. See Maintenance Protoc
 
 ---
 
+**Frontend — Privy walletList vs COOP.**
+Privy default `appearance.walletList` is `detected_wallets`, `metamask`, `coinbase_wallet`, `rainbow`, `wallet_connect`. That default is what initialized Coinbase Wallet SDK / Base Account SDK on load (independent of wagmi connectors). Live config is now `metamask`, `detected_ethereum_wallets`, `wallet_connect_qr`. No `coinbase_wallet` / `base_account`. COOP/COEP headers unchanged.
+
+---
+
+**Frontend — Privy app ID + client ID.**
+`PrivyProvider` takes `appId` and `clientId` from layout (`NEXT_PUBLIC_PRIVY_*`). Wallet-only config, `createOnLogin: "off"`. Privy init is client-only: SSR uses `wagmi`'s `WagmiProvider` so landing `usePublicClient` still works; after hydrate, Privy wraps `@privy-io/wagmi`. Dashboard header/app/faucet are `dynamic(..., { ssr: false })` so `usePrivy` never runs on the server. The 500 was empty App ID, missing Client ID, then Privy throwing that same error when it initialized during SSR.
+
+---
+
+**Frontend — cut Coinbase Smart Wallet / x402 from the bundle.**
+`@privy-io/wagmi` side-effect-imports the `wagmi/connectors` barrel, which re-exports `baseAccount` and pulls `@coinbase/cdp-sdk` → `@x402/*`. Zealed does not use that connector. `next.config` aliases `wagmi/connectors` to a local file that re-exports only `injected` from `@wagmi/core`. Privy `walletList` is detected extensions + MetaMask + WalletConnect QR (no `base_account`). x402 webpack stubs removed.
+
+---
+
+**Frontend — Privy wallet connect.**
+Replaced injected MetaMask/Phantom `useConnect` with `@privy-io/react-auth` + `@privy-io/wagmi` (wagmi v2). Provider order: Privy → QueryClient → Wagmi (`reconnectOnMount={false}`). `loginMethods: ["wallet"]` only; `embeddedWallets.ethereum.createOnLogin: "off"` (Privy docs default to email/SMS + embedded wallets, which we do not want). Connect uses `usePrivy().login`; chip disconnect uses `logout`. App ID from `NEXT_PUBLIC_PRIVY_APP_ID`. Existing wagmi read/write hooks unchanged.
+
+---
+
 **Frontend — dashboard tab icons.**
 Deposit / Withdraw / Claim tabs use `@mui/icons-material` Outlined set (`ArrowDownwardOutlined`, `ArrowUpwardOutlined`, `RedeemOutlined`; confirmed in v9.4.0). Icons inherit the tab `text-muted` / `text-ink` color, 17px, 6px gap. Underline, spacing, and panels unchanged.
 

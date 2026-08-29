@@ -8,7 +8,7 @@ Next.js 15 frontend for the confidential prize-savings demo.
 # from repo root
 pnpm install
 cp apps/web/.env.example apps/web/.env.local
-# fill NEXT_PUBLIC_VAULT_ADDRESS, TICKET_ENGINE, DRAW_MANAGER, ASSET
+# fill NEXT_PUBLIC_PRIVY_APP_ID, NEXT_PUBLIC_PRIVY_CLIENT_ID, VAULT, TICKET_ENGINE, DRAW_MANAGER, ASSET
 pnpm --filter @zealed/web dev
 ```
 

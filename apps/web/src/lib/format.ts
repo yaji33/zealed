@@ -21,10 +21,28 @@ export function parseUnits(input: string, decimals = 6): bigint {
   return BigInt(wholePart) * 10n ** BigInt(decimals) + BigInt(frac || "0");
 }
 
+export function formatCompactAmount(value: bigint, decimals = 6): string {
+  const n = Number(formatUnits(value, decimals));
+  if (!Number.isFinite(n)) return formatUnits(value, decimals);
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 100_000) return `${(n / 1_000).toFixed(0)}K`;
+  return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
 export function formatTimestamp(seconds: number): string {
   if (!seconds) return "—";
   return new Date(seconds * 1000).toLocaleString(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+/** HH:MM:SS for draw-cycle timers. */
+export function formatCountdown(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (v: number) => v.toString().padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
 }

@@ -105,6 +105,23 @@ export const ticketEngineAbi = [
 ] as const;
 
 export const drawManagerAbi = [
+  { type: "error", name: "InvalidTicketEngine", inputs: [] },
+  { type: "error", name: "DrawNotCommitted", inputs: [] },
+  { type: "error", name: "DrawPendingReveal", inputs: [] },
+  { type: "error", name: "DrawAlreadyRevealed", inputs: [] },
+  { type: "error", name: "DrawNotRevealed", inputs: [] },
+  { type: "error", name: "InvalidRevealBlock", inputs: [] },
+  { type: "error", name: "DrawIntervalNotElapsed", inputs: [] },
+  { type: "error", name: "RevealTooEarly", inputs: [] },
+  { type: "error", name: "RevealTooLate", inputs: [] },
+  { type: "error", name: "ZeroTotalTickets", inputs: [] },
+  { type: "error", name: "ZeroPrize", inputs: [] },
+  { type: "error", name: "WrongDrawId", inputs: [] },
+  { type: "error", name: "AlreadyChecked", inputs: [] },
+  { type: "error", name: "NotRegistered", inputs: [] },
+  { type: "error", name: "NotChecked", inputs: [] },
+  { type: "error", name: "AlreadyWinRevealed", inputs: [] },
+  { type: "error", name: "NotAWinner", inputs: [] },
   {
     type: "function",
     name: "drawId",
@@ -139,6 +156,54 @@ export const drawManagerAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "lastCommitTimestamp",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "MIN_DRAW_INTERVAL",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "MIN_REVEAL_DELAY",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "MAX_REVEAL_WINDOW",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "commitDraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "revealBlock_", type: "uint256" },
+      { name: "prizeAmount", type: "uint64" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "revealDraw",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "totalTicketsCleartext", type: "uint64" },
+      { name: "decryptionProof", type: "bytes" },
+    ],
+    outputs: [],
   },
   {
     type: "function",

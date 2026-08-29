@@ -1,23 +1,19 @@
-import { injected } from "@wagmi/core";
-import { createConfig, http, type Config } from "wagmi";
-import { hardhat, sepolia } from "wagmi/chains";
+import { http, type Config } from "wagmi";
+import { createConfig } from "@privy-io/wagmi";
+import { sepolia } from "wagmi/chains";
+import { activeChain } from "@/lib/chain";
 
-const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? "11155111");
-
-export const activeChain = chainId === hardhat.id ? hardhat : sepolia;
+export { activeChain };
 
 let wagmiConfig: Config | undefined;
 
 export function getWagmiConfig(): Config {
   if (!wagmiConfig) {
     wagmiConfig = createConfig({
-      chains: [activeChain],
-
-      connectors: [injected({ shimDisconnect: false })],
+      chains: [sepolia],
       ssr: true,
       transports: {
         [sepolia.id]: http(process.env.NEXT_PUBLIC_RPC_URL),
-        [hardhat.id]: http("http://127.0.0.1:8545"),
       },
     });
   }

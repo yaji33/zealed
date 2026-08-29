@@ -6,11 +6,8 @@ import type { Hex } from "viem";
 import { addresses } from "@/lib/config";
 import { vaultAbi } from "@/lib/abi/zealed";
 import { getFhevmInstance } from "@/lib/relayerSdk";
+import { isZeroHandle, readClearValue } from "@/lib/publicDecrypt";
 
-/**
- * Public self-relay decrypt of ConfidentialVault.totalDeposits (aggregate TVL).
- * No wallet required — same disclosure class as TicketEngine.totalTickets.
- */
 export function useVaultTvl() {
   const publicClient = usePublicClient();
   const vault = addresses.vault;
@@ -28,15 +25,13 @@ export function useVaultTvl() {
         functionName: "totalDeposits",
       })) as Hex;
 
-      if (!handle || /^0x0+$/.test(handle)) return 0n;
+      if (isZeroHandle(handle)) return 0n;
 
       const instance = await getFhevmInstance();
       const result = await instance.publicDecrypt([handle]);
-      const value = result.clearValues[handle];
-      if (typeof value === "bigint") return value;
-      if (typeof value === "number") return BigInt(value);
-      if (typeof value === "string") return BigInt(value);
-      throw new Error("Unexpected publicDecrypt result for vault TVL");
+      const value = readClearValue(result.clearValues as Record<string, unknown>, handle);
+      if (value === undefined) throw new Error("Unexpected publicDecrypt result for vault TVL");
+      return value;
     },
   });
 }

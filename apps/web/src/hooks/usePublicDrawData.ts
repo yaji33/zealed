@@ -5,6 +5,7 @@ import { usePublicClient, useReadContract } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { addresses } from "@/lib/config";
 import { drawManagerAbi } from "@/lib/abi/zealed";
+import { getContractEventsChunked } from "@/lib/contractEvents";
 
 export type DrawHistoryRow = {
   drawId: bigint;
@@ -49,27 +50,33 @@ export function usePublicDrawData() {
     query: { enabled: Boolean(drawManager) },
   });
 
+  const { data: revealBlock } = useReadContract({
+    address: drawManager,
+    abi: drawManagerAbi,
+    functionName: "revealBlock",
+    query: { enabled: Boolean(drawManager) },
+  });
+
   const historyQuery = useQuery({
-    queryKey: ["draw-history", drawManager, drawId?.toString()],
-    enabled: Boolean(publicClient && drawManager),
+    queryKey: ["draw-history", drawManager, drawId?.toString(), revealed, prizeAmountPlain?.toString()],
+    enabled: Boolean(publicClient && drawManager && drawId !== undefined && revealed !== undefined),
+    staleTime: 15_000,
+    refetchInterval: 20_000,
     queryFn: async (): Promise<DrawHistoryRow[]> => {
       if (!publicClient || !drawManager) return [];
 
-      const committed = await publicClient.getContractEvents({
-        address: drawManager,
-        abi: drawManagerAbi,
-        eventName: "DrawCommitted",
-        fromBlock: 0n,
-        toBlock: "latest",
-      });
-
-      const revealedEvents = await publicClient.getContractEvents({
-        address: drawManager,
-        abi: drawManagerAbi,
-        eventName: "DrawRevealed",
-        fromBlock: 0n,
-        toBlock: "latest",
-      });
+      const [committed, revealedEvents] = await Promise.all([
+        getContractEventsChunked(publicClient, {
+          address: drawManager,
+          abi: drawManagerAbi,
+          eventName: "DrawCommitted",
+        }),
+        getContractEventsChunked(publicClient, {
+          address: drawManager,
+          abi: drawManagerAbi,
+          eventName: "DrawRevealed",
+        }),
+      ]);
 
       const revealedById = new Map<string, (typeof revealedEvents)[number]>();
       for (const ev of revealedEvents) {
@@ -94,8 +101,12 @@ export function usePublicDrawData() {
 
         let committedAt: number | undefined;
         if (ev.blockNumber !== undefined) {
-          const block = await publicClient.getBlock({ blockNumber: ev.blockNumber });
-          committedAt = Number(block.timestamp);
+          try {
+            const block = await publicClient.getBlock({ blockNumber: ev.blockNumber });
+            committedAt = Number(block.timestamp);
+          } catch {
+            committedAt = undefined;
+          }
         }
 
         rows.push({
@@ -107,6 +118,27 @@ export function usePublicDrawData() {
           totalTickets: revealedArgs?.totalTickets,
           committedAt,
         });
+      }
+
+      if (
+        drawId !== undefined &&
+        drawId > 0n &&
+        revealed === true &&
+        prizeAmountPlain !== undefined &&
+        prizeAmountPlain > 0n
+      ) {
+        const current = rows.find((row) => row.drawId === drawId);
+        if (current) {
+          current.settled = true;
+          if (current.prizeAmount === 0n) current.prizeAmount = prizeAmountPlain;
+        } else {
+          rows.push({
+            drawId,
+            revealBlock: revealBlock ?? 0n,
+            prizeAmount: prizeAmountPlain,
+            settled: true,
+          });
+        }
       }
 
       return rows.sort((a, b) => Number(b.drawId - a.drawId));

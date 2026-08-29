@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useAccount } from "wagmi";
 import { WalletGate } from "@/components/WalletGate";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
-import { cardClass, sectionRuleClass } from "@/lib/uiClasses";
+import { cardClass } from "@/lib/uiClasses";
 
 function AppPanel({ message }: { message: string }) {
   return (
@@ -24,8 +24,8 @@ const PrivateDashboard = dynamic(
   },
 );
 
-const PublicOverview = dynamic(
-  () => import("@/components/PublicOverview").then((m) => ({ default: m.PublicOverview })),
+const VaultChart = dynamic(
+  () => import("@/components/VaultChart").then((m) => ({ default: m.VaultChart })),
   {
     ssr: false,
     loading: () => <AppPanel message="Loading pool data…" />,
@@ -33,21 +33,19 @@ const PublicOverview = dynamic(
 );
 
 export function DashboardApp() {
-  const { isConnected, status } = useAccount();
-  const { isPending: isConnectPending, ready } = useConnectWallet();
-  const checking = !ready || status === "connecting" || isConnectPending;
+  const { isConnected } = useAccount();
+  const { ready } = useConnectWallet();
 
   return (
-    <>
-      {checking ? (
+    <div className="flex flex-col gap-6">
+      {!ready ? (
         <AppPanel message="Checking wallet…" />
       ) : isConnected ? (
         <PrivateDashboard />
       ) : (
         <WalletGate />
       )}
-      <div className={sectionRuleClass} role="separator" />
-      <PublicOverview />
-    </>
+      <VaultChart />
+    </div>
   );
 }

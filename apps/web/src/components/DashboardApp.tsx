@@ -34,8 +34,8 @@ const PublicOverview = dynamic(
 
 export function DashboardApp() {
   const { isConnected, status } = useAccount();
-  const { isPending: isConnectPending } = useConnectWallet();
-  const checking = status === "connecting" || isConnectPending;
+  const { isPending: isConnectPending, ready } = useConnectWallet();
+  const checking = !ready || status === "connecting" || isConnectPending;
 
   return (
     <>

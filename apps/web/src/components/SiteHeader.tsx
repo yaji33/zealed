@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useAccount, useDisconnect } from "wagmi";
+import { useAccount } from "wagmi";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
 
 const btnMint =
@@ -14,8 +14,7 @@ const btnWallet =
 export function SiteHeader() {
   const pathname = usePathname();
   const { address, isConnected } = useAccount();
-  const { connectWallet, canConnect, isPending, error } = useConnectWallet();
-  const { disconnect } = useDisconnect();
+  const { connectWallet, disconnectWallet, canConnect, isPending, error } = useConnectWallet();
   const faucetActive = pathname === "/dashboard/faucet" || pathname.startsWith("/dashboard/faucet/");
 
   return (
@@ -37,7 +36,7 @@ export function SiteHeader() {
               |
             </span>
             {isConnected && address ? (
-              <button type="button" className={btnWallet} onClick={() => disconnect()}>
+              <button type="button" className={btnWallet} onClick={() => void disconnectWallet()}>
                 {shorten(address)}
               </button>
             ) : (

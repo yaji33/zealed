@@ -4,7 +4,7 @@ import { useConnectWallet } from "@/hooks/useConnectWallet";
 import { cardClass } from "@/lib/uiClasses";
 
 export function WalletGate() {
-  const { connectWallet, canConnect, isPending, error, connector } = useConnectWallet();
+  const { connectWallet, canConnect, isPending, error, ready } = useConnectWallet();
 
   return (
     <section className={`${cardClass} px-8 py-14 text-center sm:px-12`}>
@@ -25,13 +25,8 @@ export function WalletGate() {
           disabled={isPending || !canConnect}
           onClick={() => void connectWallet()}
         >
-          {isPending ? "Connecting…" : !connector ? "No wallet detected" : "Connect wallet"}
+          {isPending || !ready ? "Connecting…" : "Connect wallet"}
         </button>
-        {!connector && (
-          <p className="m-0 max-w-[24rem] text-[0.85rem] text-muted">
-            Install a browser wallet, then refresh this page.
-          </p>
-        )}
         {error && <p className="m-0 max-w-[28rem] text-[0.88rem] text-danger">{error.message}</p>}
       </div>
     </section>

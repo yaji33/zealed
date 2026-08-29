@@ -20,7 +20,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${dmSans.variable} ${fraunces.variable} ${inter.variable}`}>
-        <Providers>{children}</Providers>
+        <Providers
+          appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID!}
+          clientId={process.env.NEXT_PUBLIC_PRIVY_CLIENT_ID!}
+        >
+          {children}
+        </Providers>
       </body>
     </html>
   );

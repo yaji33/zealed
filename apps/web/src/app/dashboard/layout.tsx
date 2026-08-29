@@ -1,9 +1,14 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, type ReactNode } from "react";
-import { SiteHeader } from "@/components/SiteHeader";
 import { endAppTransition } from "@/lib/appTransition";
 import { prefetchDashboardChunks } from "@/lib/prefetchApp";
+
+const SiteHeader = dynamic(
+  () => import("@/components/SiteHeader").then((m) => ({ default: m.SiteHeader })),
+  { ssr: false },
+);
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   useEffect(() => {

@@ -167,7 +167,9 @@ Tailwind v4 utilities in JSX are the standard for all UI in `apps/web`. Design t
 
 `globals.css` is **tokens and resets only**: `@import "tailwindcss"`, `@config`, Google Fonts import, base-layer resets (`html`, `body`, `a`, `code`). No bespoke component classes (`.landing-*`, `.panel`, `.btn`, …). Dashboard panels/buttons that repeat long class strings may import shared constants from `src/lib/uiClasses.ts`; do not add new named classes to `globals.css` to work around Tailwind.
 
-Dot-matrix / ASCII art (`AsciiPoolField`): rendering logic stays in TS; only outer layout uses Tailwind on the component wrapper.
+Dot-matrix / ASCII art (`AsciiPoolField`, `StepPixelArt`, dashboard `VaultChart`): rendering logic stays in TS; only outer layout uses Tailwind on the component wrapper.
+
+Wallet errors: never render `Error.message` from viem/wagmi. Map user-reject (EIP-1193 4001) to a quiet "Transaction cancelled." Everyone else gets `shortMessage` or the first useful line. Calldata, docs URLs, and library versions stay out of the UI.
 
 ## 8 — Reference Index
 
@@ -177,6 +179,86 @@ Dot-matrix / ASCII art (`AsciiPoolField`): rendering logic stays in TS; only out
 ## 9 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Frontend — prize bars match the 0 to max axis.**
+Equal 1 cUSDC draws were plotting at ~70% height because unused grid rows sat between the peak and the "1 cUSDC" label. Max value now fills the plot; each bar is labeled with its prize. Same height means the same prize.
+
+---
+
+**Frontend — pool chart header, scale, and copy.**
+Pool card header is one row: `POOL` + title on the left, Next draw and TVL as matching stats on the right. Chart peaks leave headroom under the tab rule. TVL is pool size over time (no fake zero-to-now ramp); prize is one bar per settled draw, labeled `#1` `#2` `#3`, with a y-axis in cUSDC.
+
+---
+
+**Frontend — pool charts read live state, not genesis logs.**
+TVL/prize plots were empty because `getContractEvents({ fromBlock: 0 })` fails on public RPCs, historical `totalDeposits` calls need archive nodes, and draw-history was keyed only on `drawId` so a later reveal never refetched. Logs are chunked over a lookback window; prize series falls back to on-chain `revealed` + `prizeAmountPlain`; TVL series uses the live public TVL (plus a zero baseline) so 79 cUSDC actually plots.
+
+---
+
+**Frontend — Claim tab hierarchy.**
+Claim is two left-aligned blocks: **Next draw** (timer) then **This draw** (result + one CTA on the same row). Removed frozen-ticket copy, the long claim explainer, and the misaligned `fieldClass` checkbox. Publish is a single row, winners only.
+
+---
+
+**Frontend — one claim action, explicit win/loss.**
+Claim was two overlapping buttons (`checkIfWon` vs decrypt prize) while Decrypt position only unseals vault stats. **See if I won** now waits for the check tx, then user-decrypts the prize. Result copy is "You won this draw" / "You did not win this draw." There is no separate payout tx; Withdraw is principal.
+
+---
+
+**Keeper — Sepolia loop for commit/reveal.**
+`pnpm keeper` runs `scripts/keeper-sepolia.ts` on the Hardhat deployer: poll 15s, `commitDraw` after the interval (1 cUSDC prize, 32-block reveal slack), `revealDraw` after the reveal block. No `checkIfWon`, no depositor loop, no ticket totals in logs. Decision table is unit-tested in `test/keeperAction.ts`. Claim **Complete draw** remains a fallback.
+
+---
+
+**Frontend — `commitDraw` InvalidRevealBlock (0x09fe84b8).**
+App used `block.number + MIN_REVEAL_DELAY + 1`. MetaMask confirmation let Sepolia move past that, so the mined tx reverted `InvalidRevealBlock` while Claim said "The transaction reverted." Reveal target now includes 32 blocks of slack. Selector `0x09fe84b8` maps to retry copy.
+
+---
+
+**Frontend — Complete draw no longer lies on revert.**
+`waitForTransactionReceipt` does not throw on a failed tx, so Claim showed "Draw is in progress" after MetaMask "Interaction failed." We now require `receipt.status === "success"`, simulate known DrawManager errors before sending, size gas from estimate (cap 1.5M) and refuse when the wallet cannot cover it, and map empty `commitDraw` reverts / insufficient funds to short copy. Custom errors added to `drawManagerAbi`.
+
+---
+
+**Frontend — draw UI is a countdown, not a start button.**
+Public clocks always read **Next draw** + `HH:MM:SS` (landing, vault chart, Claim), matching PoolTogether adopter landings. Claim only shows a quiet **Complete draw** when the period has elapsed or the reveal block is in; that poke does not choose a winner. Default tab is no longer Claim just because a poke is available.
+
+---
+
+**Frontend — PoolTogether-style draw timer + in-app keeper.**
+Draw cadence is now in the app, not only `smoke-draw-sepolia.ts`. `useDrawCycle` reads `lastCommitTimestamp` + `MIN_DRAW_INTERVAL` (20 min) and the reveal-block gap. Claim shows the countdown with permissionless **Start draw** (`commitDraw`, 1 cUSDC public prize) and **Settle draw** (`publicDecrypt(totalTickets)` + `revealDraw`). Same clock on the vault chart and landing pool field. Protocol is unchanged: no depositor loop, prize amounts stay off logs.
+
+---
+
+**Frontend — faucet wrap success is instant.**
+Wrap confirmation no longer awaits a full-chain Transfer log scan (that was the ~10s stall with step 3 stuck on). On success we bump the cached wrap total immediately, mark step 3 complete, and refetch logs in the background.
+
+---
+
+**Frontend — faucet wrap amount no longer traps approve.**
+Editing the wrap field used to exceed the last ERC-20 allowance, lock step 3 (input disabled), and leave a stale "Wrapper approved" banner. Approve now covers the full USDC balance; wrap stays editable after mint; confirmed allowance is kept locally so a slow RPC cannot strand the flow.
+
+---
+
+**Frontend — wallet error copy.**
+Rejecting a MetaMask signature is not a crash: `noticeFromWalletError` maps 4001 / `UserRejectedRequestError` to a muted "Transaction cancelled." Other failures use viem `shortMessage`, never the full dump (calldata, docs, version). Wired through vault actions and the faucet.
+
+---
+
+**Frontend — dashboard stack, chart under the pool.**
+Pool (gate / private position + deposit-withdraw-claim) sits first; `VaultChart` is full-width below it. Protocol aggregates + draw history table removed, they duplicated the vault TVL already on the chart.
+
+---
+
+**Frontend — nav wallet chip dropdown.**
+Connected address chip in `SiteHeader` opens a `bg-surface` / `border-line` menu (truncated address + Disconnect). Disconnect is wagmi `useDisconnect`, not Privy `logout()`: Zealed connects via `connectWallet()` with no Privy session, so `logout()` was a no-op and the chip looked inert. Dashboard has no second address display.
+
+---
+
+**Frontend — Connect uses Privy `connectWallet`.**
+Nav chip and gate card both go through `useConnectWallet` → `usePrivy().connectWallet` (EIP-6963 picker). Previously they called `login()`, which SIWE-auths against `window.ethereum` and hangs when multiple extensions race. Click no longer sets a pending flag that unmounted the gate.
 
 ---
 

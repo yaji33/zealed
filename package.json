@@ -5,6 +5,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "pnpm --filter @zealed/web dev",
+    "keeper": "pnpm --filter @zealed/contracts keeper:sepolia",
     "test": "turbo run test",
     "compile": "pnpm --filter @zealed/contracts compile"
   },

@@ -64,6 +64,7 @@
     "test": "hardhat test",
     "test:sepolia": "hardhat test --network sepolia",
     "typechain": "cross-env TS_NODE_TRANSPILE_ONLY=true hardhat typechain",
-    "deploy:sepolia": "hardhat deploy --network sepolia"
+    "deploy:sepolia": "hardhat deploy --network sepolia",
+    "keeper:sepolia": "hardhat run scripts/keeper-sepolia.ts --network sepolia"
   }
 }

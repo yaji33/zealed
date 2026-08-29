@@ -33,7 +33,19 @@ Deploy script (full trio: vault + TicketEngine + DrawManager, then wires `setTic
 
 ### Draw keeper flow (permissionless)
 
-Both `commitDraw` and `revealDraw` are **permissionless** (no admin key). For the Sepolia demo they are run via `packages/contracts/scripts/smoke-draw-sepolia.ts` (or `RUN_DRAW=1` on `smoke-sepolia.ts`) from a funded wallet when a cycle is needed.
+Both `commitDraw` and `revealDraw` are **permissionless** (no admin key). Production PoolTogether adopters run a **keeper** so savers never send those txs.
+
+**Demo keeper** (Hardhat signer / deployer key, polls every 15s):
+
+```bash
+pnpm keeper
+```
+
+(`packages/contracts` → `hardhat run scripts/keeper-sepolia.ts --network sepolia`). It commits when `MIN_DRAW_INTERVAL` has elapsed (public prize **1 cUSDC**) and reveals after the reveal block. It does not call `checkIfWon`. The Claim **Complete draw** button stays as a fallback if the keeper is down.
+
+The landing pool and the vault chart show the public countdown. Manual one-shot smoke:
+
+`packages/contracts/scripts/smoke-draw-sepolia.ts` (or `RUN_DRAW=1` on `smoke-sepolia.ts`).
 
 1. **`commitDraw(revealBlock, prizeAmount)`** — freezes TicketEngine weights (snapshot for the draw), bumps `drawId`, and picks a future `revealBlock`. Requires `revealBlock >= block.number + MIN_REVEAL_DELAY` (**5 blocks**, ~1 minute on Sepolia) and at least **`MIN_DRAW_INTERVAL` (20 minutes)** since the previous commit. Both values are demo-scaled; production would use a longer cadence (e.g. daily) and a wider commit-to-reveal gap.
 2. Wait until the reveal block is mined (and within the 256-block `blockhash` window).

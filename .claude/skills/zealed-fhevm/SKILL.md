@@ -125,7 +125,7 @@ Total ticket count (needed to bound `r`) is the tree's root-level running sum, p
 
 ## 4 — Prize Claim / Decryption
 
-Once `checkIfWon` has set `_pendingPrize[msg.sender]`, the user decrypts it client-side via the relayer SDK's user-decryption flow (EIP-712 signed permit), not via any on-chain admin path. Optional `revealWin()` (build-brief §9) does **not** decrypt the prize amount: it stores a publicly decryptable `ebool` win flag at check time, then verifies that flag via self-relay `publicDecrypt` + `FHE.checkSignatures` and emits `WinRevealed(drawId, account, tier)` only. Never add an admin/server decrypt path for balances or prizes.
+Once `checkIfWon` has set `_pendingPrize[msg.sender]`, the user decrypts it client-side via the relayer SDK's user-decryption flow (EIP-712 signed permit), not via any on-chain admin path. **`claim(drawId)`** then transfers cUSDC from the DrawManager pot: winners receive `prizeOfDraw[drawId]`; losers get an encrypted zero (no revert). Prize liquidity is funded at `commitDraw` from the committer (demo-scaled yield = public TVL × elapsed / `YIELD_DIVISOR`), not skimmed from vault principal. Optional `revealWin()` (build-brief §9) does **not** decrypt the prize amount: it stores a publicly decryptable `ebool` win flag at check time, then verifies that flag via self-relay `publicDecrypt` + `FHE.checkSignatures` and emits `WinRevealed(drawId, account, tier)` only. Never add an admin/server decrypt path for balances or prizes.
 
 ## 5 — Testing
 
@@ -179,6 +179,11 @@ Wallet errors: never render `Error.message` from viem/wagmi. Map user-reject (EI
 ## 9 — Build Log
 
 Append here after each module ships. Newest entry on top. See Maintenance Protocol above for what does and doesn't belong here versus in Sections 1–6.
+
+---
+
+**Contracts — yield at commit, payout on claim.**
+`commitDraw` now takes public-decrypted vault TVL + proof, sets `prize = tvl × elapsed / YIELD_DIVISOR` (~1% of TVL per 20 min), and pulls that cUSDC from the committer into a DrawManager pot. `claim(drawId)` pays winners (silent encrypted zero for losers). `prizeOfDraw` survives later commits. Keeper + Complete draw + Claim UI wired; `DEMO_PRIZE_PLAIN` removed. Principal stays in the vault.
 
 ---
 

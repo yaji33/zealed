@@ -160,9 +160,18 @@ async function main() {
     console.log("ticket index:", index.toString());
     if (index === 0n) throw new Error("expected ticket index after deposit");
 
+    const drawOp = await asset.isOperator(signer.address, drawAddress);
+    if (!drawOp) {
+      await (await asset.setOperator(drawAddress, OPERATOR_UNTIL)).wait();
+      console.log("setOperator(DrawManager)");
+    }
+
     const minDelay = Number(await draw.MIN_REVEAL_DELAY());
     const target = (await ethers.provider.getBlockNumber()) + minDelay + 1;
-    await (await draw.commitDraw(target, 1000n)).wait();
+    const tvlClear = BigInt(String(totalDecrypt.clearValues[totalHandle]));
+    await (
+      await draw.commitDraw(target, tvlClear, toHex(totalDecrypt.decryptionProof), { gasLimit: 1_500_000n })
+    ).wait();
     console.log("committed draw; waiting for block", target);
     while ((await ethers.provider.getBlockNumber()) <= target) {
       await new Promise((r) => setTimeout(r, 12_000));

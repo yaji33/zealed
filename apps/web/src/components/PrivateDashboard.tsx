@@ -14,7 +14,7 @@ import {
 import { addresses, contractsConfigured, OPERATOR_UNTIL } from "@/lib/config";
 import { drawManagerAbi, erc7984Abi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
 import { useFhevm } from "@/lib/fhe";
-import { DRAW_CHECK_GAS } from "@/lib/draw";
+import { DRAW_CHECK_GAS, DRAW_CLAIM_GAS } from "@/lib/draw";
 import { formatUnits, parseUnits } from "@/lib/format";
 import { waitForOkTx } from "@/lib/waitForTx";
 import { noticeFromWalletError } from "@/lib/walletError";
@@ -104,6 +104,14 @@ export function PrivateDashboard() {
     address: draw,
     abi: drawManagerAbi,
     functionName: "hasChecked",
+    args: drawId !== undefined && address ? [drawId, address] : undefined,
+    query: { enabled: Boolean(draw && address && drawId !== undefined) },
+  });
+
+  const { data: hasClaimed, refetch: refetchClaimed } = useReadContract({
+    address: draw,
+    abi: drawManagerAbi,
+    functionName: "hasClaimed",
     args: drawId !== undefined && address ? [drawId, address] : undefined,
     query: { enabled: Boolean(draw && address && drawId !== undefined) },
   });
@@ -324,7 +332,7 @@ export function PrivateDashboard() {
         kind: "ok",
         text:
           value > 0n
-            ? "You won this draw. The amount is only readable on this device."
+            ? "You won this draw. Claim to pull cUSDC from the prize pot."
             : "You did not win this draw. Your principal is unchanged.",
       });
     });
@@ -337,8 +345,30 @@ export function PrivateDashboard() {
         kind: "ok",
         text:
           value > 0n
-            ? "You won this draw. The amount is only readable on this device."
+            ? "You won this draw. Claim to pull cUSDC from the prize pot."
             : "You did not win this draw. Your principal is unchanged.",
+      });
+    });
+  }
+
+  async function onClaimPrize() {
+    if (!draw || drawId === undefined || !publicClient || !address) return;
+    await withBusy("Claiming prize…", async () => {
+      const hash = await writeContractAsync({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "claim",
+        args: [drawId],
+        gas: DRAW_CLAIM_GAS,
+      });
+      await waitForOkTx(publicClient, hash);
+      await refetchClaimed();
+      setStatus({
+        kind: "ok",
+        text:
+          prize !== null && prize > 0n
+            ? "Prize sent to your wallet as confidential cUSDC."
+            : "Claim recorded. No prize tokens moved.",
       });
     });
   }
@@ -652,6 +682,19 @@ export function PrivateDashboard() {
                   >
                     Reveal result
                   </button>
+                ) : hasChecked && prize !== null && prize > 0n && !hasClaimed ? (
+                  <button
+                    type="button"
+                    className={btnClass}
+                    disabled={!configured || working || drawId === undefined}
+                    onClick={() => void onClaimPrize()}
+                  >
+                    Claim prize
+                  </button>
+                ) : hasChecked && hasClaimed ? (
+                  <p className="m-0 text-[0.88rem] text-muted">
+                    {prize !== null && prize > 0n ? "Prize claimed" : "Checked"}
+                  </p>
                 ) : null}
               </div>
               {hasChecked && prize !== null && prize > 0n ? (

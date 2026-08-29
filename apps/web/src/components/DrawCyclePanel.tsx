@@ -5,9 +5,14 @@ import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { bytesToHex, type Address, type Hex, type PublicClient } from "viem";
 import { useDrawCycle } from "@/hooks/useDrawCycle";
 import { usePublicDrawData } from "@/hooks/usePublicDrawData";
-import { drawManagerAbi, ticketEngineAbi } from "@/lib/abi/zealed";
+import { useVaultTvl } from "@/hooks/useVaultTvl";
+import { drawManagerAbi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
 import { addresses, contractsConfigured } from "@/lib/config";
-import { DEMO_PRIZE_PLAIN, DRAW_REVEAL_SLACK_BLOCKS, DRAW_SETTLE_GAS } from "@/lib/draw";
+import {
+  DRAW_REVEAL_SLACK_BLOCKS,
+  DRAW_SETTLE_GAS,
+  estimateYieldPrize,
+} from "@/lib/draw";
 import { formatCountdown, formatUnits } from "@/lib/format";
 import { getFhevmInstance } from "@/lib/relayerSdk";
 import { isZeroHandle, readClearValue } from "@/lib/publicDecrypt";
@@ -98,22 +103,30 @@ export function DrawCyclePanel() {
   const publicClient = usePublicClient();
   const cycle = useDrawCycle();
   const { prizeAmountPlain } = usePublicDrawData();
+  const { data: tvl } = useVaultTvl();
   const { writeContractAsync } = useWriteContract();
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
 
   const draw = addresses.drawManager;
   const tickets = addresses.ticketEngine;
+  const vault = addresses.vault;
   const working = Boolean(busy);
 
-  const nextPrize =
-    prizeAmountPlain && prizeAmountPlain > 0n ? prizeAmountPlain : DEMO_PRIZE_PLAIN;
+  const estimatedOpenPrize =
+    tvl !== undefined && cycle.phase === "open"
+      ? estimateYieldPrize(tvl, cycle.minInterval ?? 20n * 60n)
+      : 0n;
 
   const caption =
     cycle.phase === "interval"
-      ? `${formatUnits(nextPrize)} cUSDC this cycle`
+      ? prizeAmountPlain && prizeAmountPlain > 0n
+        ? `Last prize ${formatUnits(prizeAmountPlain)} cUSDC`
+        : "Waiting for the next interval"
       : cycle.phase === "open"
-        ? "Waiting on the keeper"
+        ? estimatedOpenPrize > 0n
+          ? `About ${formatUnits(estimatedOpenPrize)} cUSDC yield to post`
+          : "Waiting on the keeper"
         : cycle.phase === "awaiting-reveal"
           ? "Reveal delay"
           : cycle.phase === "settle"
@@ -143,11 +156,35 @@ export function DrawCyclePanel() {
   }
 
   async function onStartDraw() {
-    if (!draw || !publicClient || !address) return;
+    if (!draw || !vault || !publicClient || !address) return;
     await withBusy("Completing draw…", async () => {
+      const handle = (await publicClient.readContract({
+        address: vault,
+        abi: vaultAbi,
+        functionName: "totalDeposits",
+      })) as Hex;
+
+      if (isZeroHandle(handle)) {
+        throw new Error("Vault TVL is empty. Deposit before committing a draw.");
+      }
+
+      setBusy("Decrypting vault TVL…");
+      const instance = await getFhevmInstance();
+      const pub = await instance.publicDecrypt([handle]);
+      const tvlClear = readClearValue(pub.clearValues as Record<string, unknown>, handle);
+      if (tvlClear === undefined || tvlClear === 0n) {
+        throw new Error("Vault TVL is empty. Deposit before committing a draw.");
+      }
+      if (tvlClear > 0xffff_ffff_ffff_ffffn) {
+        throw new Error("TVL is too large to commit.");
+      }
+
       const latest = await publicClient.getBlockNumber();
       const target = latest + cycle.minRevealDelay + DRAW_REVEAL_SLACK_BLOCKS;
-      const args = [target, DEMO_PRIZE_PLAIN] as const;
+      const proof = proofToHex(pub.decryptionProof as Uint8Array | string);
+      const args = [target, tvlClear, proof] as const;
+
+      setBusy("Completing draw…");
       try {
         await publicClient.simulateContract({
           address: draw,
@@ -182,7 +219,10 @@ export function DrawCyclePanel() {
         });
       });
       await cycle.refetch();
-      setStatus({ kind: "ok", text: "Draw is in progress. The timer is the reveal delay." });
+      setStatus({
+        kind: "ok",
+        text: "Draw is in progress. Yield was pulled into the prize pot from your cUSDC.",
+      });
     });
   }
 

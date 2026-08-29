@@ -34,11 +34,26 @@ async function main() {
   console.log("drawId", drawId.toString(), "revealed", revealed);
 
   if (drawId === 0n || revealed) {
+    const vault = await ethers.getContractAt("ConfidentialVault", deployment.contracts.ConfidentialVault, signer);
+    const asset = await ethers.getContractAt(
+      ["function setOperator(address operator, uint48 until) external"],
+      deployment.asset,
+      signer,
+    );
+    await (await asset.setOperator(drawAddress, 2n ** 48n - 1n, { gasLimit: 300_000n })).wait().catch(() => undefined);
+
+    const tvlHandle = toHex(await vault.totalDeposits());
+    const tvlPub = await instance.publicDecrypt([tvlHandle]);
+    const tvl = BigInt(String(tvlPub.clearValues[tvlHandle] ?? 0));
+    if (tvl === 0n) throw new Error("vault TVL is zero — deposit first");
+
     const minDelay = Number(await draw.MIN_REVEAL_DELAY());
     const target = (await ethers.provider.getBlockNumber()) + minDelay + 1;
-    await (await draw.commitDraw(target, 1000n, { gasLimit: 1_500_000n })).wait();
+    await (
+      await draw.commitDraw(target, tvl, toHex(tvlPub.decryptionProof), { gasLimit: 1_500_000n })
+    ).wait();
     drawId = await draw.drawId();
-    console.log("committed draw", drawId.toString(), "revealBlock", target);
+    console.log("committed draw", drawId.toString(), "revealBlock", target, "prize", (await draw.prizeAmountPlain()).toString());
     while ((await ethers.provider.getBlockNumber()) <= target) {
       await new Promise((r) => setTimeout(r, 12_000));
       console.log("…block", await ethers.provider.getBlockNumber());

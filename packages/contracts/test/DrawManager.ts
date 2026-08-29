@@ -4,8 +4,12 @@ import { ethers, fhevm } from "hardhat";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 
 import {
+  ConfidentialVault,
+  ConfidentialVault__factory,
   DrawManager,
   DrawManager__factory,
+  MockERC7984,
+  MockERC7984__factory,
   TicketEngine,
   TicketEngine__factory,
 } from "../types";
@@ -16,43 +20,64 @@ type Signers = {
   bob: HardhatEthersSigner;
 };
 
-async function deployFixture() {
+const OPERATOR_UNTIL = 2n ** 48n - 1n;
+/** Vault TVL used for demo yield: 100 cUSDC → first-commit prize = 1 cUSDC. */
+const TVL = 100_000_000;
+const EXPECTED_FIRST_PRIZE = 1_000_000n;
+
+type Fixture = {
+  token: MockERC7984;
+  tokenAddress: string;
+  vault: ConfidentialVault;
+  vaultAddress: string;
+  tickets: TicketEngine;
+  ticketsAddress: string;
+  draw: DrawManager;
+  drawAddress: string;
+};
+
+async function deployFixture(): Promise<Fixture> {
+  const tokenFactory = (await ethers.getContractFactory("MockERC7984")) as MockERC7984__factory;
+  const token = (await tokenFactory.deploy()) as MockERC7984;
+  const tokenAddress = await token.getAddress();
+
+  const vaultFactory = (await ethers.getContractFactory("ConfidentialVault")) as ConfidentialVault__factory;
+  const vault = (await vaultFactory.deploy(tokenAddress)) as ConfidentialVault;
+  const vaultAddress = await vault.getAddress();
+
   const ticketFactory = (await ethers.getContractFactory("TicketEngine")) as TicketEngine__factory;
-  const tickets = (await ticketFactory.deploy(ethers.ZeroAddress)) as TicketEngine;
+  const tickets = (await ticketFactory.deploy(vaultAddress)) as TicketEngine;
   const ticketsAddress = await tickets.getAddress();
 
   const drawFactory = (await ethers.getContractFactory("DrawManager")) as DrawManager__factory;
-  const draw = (await drawFactory.deploy(ticketsAddress)) as DrawManager;
+  const draw = (await drawFactory.deploy(ticketsAddress, vaultAddress)) as DrawManager;
   const drawAddress = await draw.getAddress();
 
+  await (await vault.setTicketEngine(ticketsAddress)).wait();
   await (await tickets.setDrawManager(drawAddress)).wait();
 
-  return { tickets, ticketsAddress, draw, drawAddress };
+  return { token, tokenAddress, vault, vaultAddress, tickets, ticketsAddress, draw, drawAddress };
 }
 
 async function encryptWeight(ticketsAddress: string, user: string, weight: number) {
   return fhevm.createEncryptedInput(ticketsAddress, user).add64(weight).encrypt();
 }
 
-async function syncWeight(
-  tickets: TicketEngine,
-  ticketsAddress: string,
-  user: HardhatEthersSigner,
-  weight: number,
-) {
-  const enc = await encryptWeight(ticketsAddress, user.address, weight);
-  await (await tickets.connect(user).syncWeight(user.address, enc.handles[0], enc.inputProof)).wait();
+async function encryptAmount(contractAddress: string, user: string, amount: number) {
+  return fhevm.createEncryptedInput(contractAddress, user).add64(amount).encrypt();
 }
 
 describe("DrawManager", function () {
   let signers: Signers;
+  let token: MockERC7984;
+  let tokenAddress: string;
+  let vault: ConfidentialVault;
+  let vaultAddress: string;
   let tickets: TicketEngine;
   let ticketsAddress: string;
   let draw: DrawManager;
   let drawAddress: string;
   let extraSigners: HardhatEthersSigner[];
-
-  const PRIZE = 1_000_000;
 
   before(async function () {
     const ethSigners: HardhatEthersSigner[] = await ethers.getSigners();
@@ -65,17 +90,70 @@ describe("DrawManager", function () {
       console.warn("DrawManager unit tests require the FHEVM mock environment");
       this.skip();
     }
-    ({ tickets, ticketsAddress, draw, drawAddress } = await deployFixture());
+    ({ token, tokenAddress, vault, vaultAddress, tickets, ticketsAddress, draw, drawAddress } =
+      await deployFixture());
+    await seedVaultAndKeeper(signers.deployer, TVL);
   });
+
+  async function seedVaultAndKeeper(keeper: HardhatEthersSigner, tvl: number, fixture?: Fixture) {
+    const t = fixture?.token ?? token;
+    const tAddr = fixture?.tokenAddress ?? tokenAddress;
+    const v = fixture?.vault ?? vault;
+    const vAddr = fixture?.vaultAddress ?? vaultAddress;
+    const dAddr = fixture?.drawAddress ?? drawAddress;
+
+    // Alice holds the vault principal (TVL); keeper holds enough to fund the pot.
+    await (await t.mint(signers.alice.address, tvl)).wait();
+    await (await t.connect(signers.alice).setOperator(vAddr, OPERATOR_UNTIL)).wait();
+    const enc = await encryptAmount(vAddr, signers.alice.address, tvl);
+    await (await v.connect(signers.alice).deposit(enc.handles[0], enc.inputProof)).wait();
+
+    await (await t.mint(keeper.address, tvl)).wait();
+    await (await t.connect(keeper).setOperator(dAddr, OPERATOR_UNTIL)).wait();
+  }
+
+  async function syncWeight(
+    engine: TicketEngine,
+    engineAddress: string,
+    user: HardhatEthersSigner,
+    weight: number,
+  ) {
+    const enc = await encryptWeight(engineAddress, user.address, weight);
+    await (await engine.connect(user).syncWeight(user.address, enc.handles[0], enc.inputProof)).wait();
+  }
+
+  async function decryptTokenBalance(user: HardhatEthersSigner, tAddr = tokenAddress): Promise<bigint> {
+    const handle = await token.confidentialBalanceOf(user.address);
+    return fhevm.userDecryptEuint(FhevmType.euint64, handle, tAddr, user);
+  }
+
+  async function tvlProof(v: ConfidentialVault = vault): Promise<{ clear: bigint; proof: string }> {
+    const handle = await v.totalDeposits();
+    const result = await fhevm.publicDecrypt([handle]);
+    return {
+      clear: result.clearValues[handle] as bigint,
+      proof: result.decryptionProof,
+    };
+  }
+
+  async function commitDraw(
+    manager: DrawManager = draw,
+    v: ConfidentialVault = vault,
+    revealExtra = 1,
+  ): Promise<{ target: number; prize: bigint }> {
+    const delay = Number(await manager.MIN_REVEAL_DELAY());
+    const target = (await ethers.provider.getBlockNumber()) + delay + revealExtra;
+    const { clear, proof } = await tvlProof(v);
+    await (await manager.commitDraw(target, clear, proof)).wait();
+    return { target, prize: await manager.prizeAmountPlain() };
+  }
 
   async function commitAndReveal(
     engine: TicketEngine = tickets,
     manager: DrawManager = draw,
-  ): Promise<{ drawId: bigint; r: bigint; total: bigint }> {
-    const delay = Number(await manager.MIN_REVEAL_DELAY());
-    // +1: the commit tx itself mines a new block, so on-chain block.number is last+1.
-    const target = (await ethers.provider.getBlockNumber()) + delay + 1;
-    await (await manager.commitDraw(target, PRIZE)).wait();
+    v: ConfidentialVault = vault,
+  ): Promise<{ drawId: bigint; r: bigint; total: bigint; prize: bigint }> {
+    const { target, prize } = await commitDraw(manager, v);
 
     while ((await ethers.provider.getBlockNumber()) <= target) {
       await ethers.provider.send("evm_mine", []);
@@ -90,14 +168,41 @@ describe("DrawManager", function () {
       drawId: await manager.drawId(),
       r: await manager.drawRandomValue(),
       total,
+      prize,
     };
   }
+
+  it("computes first-commit prize as ~1% of TVL over MIN_DRAW_INTERVAL", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    const { prize } = await commitDraw();
+    expect(prize).to.eq(EXPECTED_FIRST_PRIZE);
+    expect(await draw.prizeOfDraw(1n)).to.eq(EXPECTED_FIRST_PRIZE);
+  });
+
+  it("scales prize with TVL and elapsed time between commits", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    await commitAndReveal();
+
+    const last = await draw.lastCommitTimestamp();
+    const interval = Number(await draw.MIN_DRAW_INTERVAL());
+    await ethers.provider.send("evm_increaseTime", [interval * 2]);
+    await ethers.provider.send("evm_mine", []);
+
+    // Refill keeper pot for the next commit.
+    await (await token.mint(signers.deployer.address, Number(EXPECTED_FIRST_PRIZE * 3n))).wait();
+
+    const { prize } = await commitDraw();
+    const committedAt = await draw.lastCommitTimestamp();
+    const expected = (BigInt(TVL) * (committedAt - last)) / 120_000n;
+    expect(prize).to.eq(expected);
+    expect(prize).to.be.gt(EXPECTED_FIRST_PRIZE);
+  });
 
   it("a user outside the drawn range receives a zero prize, not a revert", async function () {
     await syncWeight(tickets, ticketsAddress, signers.alice, 100);
     await syncWeight(tickets, ticketsAddress, signers.bob, 100);
 
-    const { drawId, r } = await commitAndReveal();
+    const { drawId, r, prize } = await commitAndReveal();
 
     await expect(draw.connect(signers.alice).checkIfWon(drawId)).to.not.be.reverted;
     await expect(draw.connect(signers.bob).checkIfWon(drawId)).to.not.be.reverted;
@@ -117,12 +222,49 @@ describe("DrawManager", function () {
 
     // Contiguous conceptual ranges: alice [0,100), bob [100,200). Exactly one winner.
     if (r < 100n) {
-      expect(alicePrize).to.eq(BigInt(PRIZE));
+      expect(alicePrize).to.eq(prize);
       expect(bobPrize).to.eq(0n);
     } else {
       expect(alicePrize).to.eq(0n);
-      expect(bobPrize).to.eq(BigInt(PRIZE));
+      expect(bobPrize).to.eq(prize);
     }
+  });
+
+  it("claim pays winner cUSDC; loser claim succeeds with zero; no double claim", async function () {
+    await syncWeight(tickets, ticketsAddress, signers.alice, 100);
+    await syncWeight(tickets, ticketsAddress, signers.bob, 100);
+
+    const { drawId, r, prize } = await commitAndReveal();
+    await (await draw.connect(signers.alice).checkIfWon(drawId)).wait();
+    await (await draw.connect(signers.bob).checkIfWon(drawId)).wait();
+
+    const winner = r < 100n ? signers.alice : signers.bob;
+    const loser = r < 100n ? signers.bob : signers.alice;
+
+    // Seed token balances so confidentialBalanceOf handles are initialized.
+    await (await token.mint(winner.address, 1)).wait();
+    await (await token.mint(loser.address, 1)).wait();
+    const winnerBefore = await decryptTokenBalance(winner);
+    const loserBefore = await decryptTokenBalance(loser);
+    expect(winnerBefore).to.eq(1n);
+    expect(loserBefore).to.eq(1n);
+
+    await expect(draw.connect(winner).claim(drawId)).to.emit(draw, "PrizeClaimed").withArgs(drawId, winner.address);
+    await expect(draw.connect(loser).claim(drawId)).to.emit(draw, "PrizeClaimed").withArgs(drawId, loser.address);
+
+    expect(await decryptTokenBalance(winner)).to.eq(winnerBefore + prize);
+    expect(await decryptTokenBalance(loser)).to.eq(loserBefore);
+
+    await expect(draw.connect(winner).claim(drawId)).to.be.revertedWithCustomError(draw, "AlreadyClaimed");
+
+    // Vault principal unchanged (Alice deposited TVL; claim pays from DrawManager pot).
+    const vaultBal = await fhevm.userDecryptEuint(
+      FhevmType.euint64,
+      await vault.connect(signers.alice).getBalance(),
+      vaultAddress,
+      signers.alice,
+    );
+    expect(vaultBal).to.eq(BigInt(TVL));
   });
 
   it("checkIfWon gas scales O(log n) with depositor count, not linearly", async function () {
@@ -130,6 +272,7 @@ describe("DrawManager", function () {
 
     async function gasForLastChecker(n: number): Promise<bigint> {
       const local = await deployFixture();
+      await seedVaultAndKeeper(signers.deployer, TVL, local);
       const users: HardhatEthersSigner[] = [signers.alice, signers.bob, ...extraSigners].slice(0, n);
       expect(users.length).to.eq(n);
 
@@ -137,7 +280,7 @@ describe("DrawManager", function () {
         await syncWeight(local.tickets, local.ticketsAddress, users[i], 10);
       }
 
-      const { drawId } = await commitAndReveal(local.tickets, local.draw);
+      const { drawId } = await commitAndReveal(local.tickets, local.draw, local.vault);
       const checker = users[n - 1];
       const tx = await local.draw.connect(checker).checkIfWon(drawId);
       const receipt = await tx.wait();
@@ -158,15 +301,18 @@ describe("DrawManager", function () {
 
     const now = await ethers.provider.getBlockNumber();
     const minDelay = Number(await draw.MIN_REVEAL_DELAY());
-    await expect(draw.commitDraw(now, PRIZE)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
-    await expect(draw.commitDraw(now + 1, PRIZE)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
-    await expect(draw.commitDraw(now + minDelay - 1, PRIZE)).to.be.revertedWithCustomError(
+    const { clear, proof } = await tvlProof();
+
+    await expect(draw.commitDraw(now, clear, proof)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
+    await expect(draw.commitDraw(now + 1, clear, proof)).to.be.revertedWithCustomError(draw, "InvalidRevealBlock");
+    await expect(draw.commitDraw(now + minDelay - 1, clear, proof)).to.be.revertedWithCustomError(
       draw,
       "InvalidRevealBlock",
     );
 
     const target = (await ethers.provider.getBlockNumber()) + minDelay + 1;
-    await (await draw.commitDraw(target, PRIZE)).wait();
+    const tvl = await tvlProof();
+    await (await draw.commitDraw(target, tvl.clear, tvl.proof)).wait();
 
     // Cannot reveal early — committer cannot grind a favorable hash immediately.
     await expect(draw.revealDraw(100, "0x")).to.be.revertedWithCustomError(draw, "RevealTooEarly");
@@ -192,10 +338,12 @@ describe("DrawManager", function () {
 
     // After the 256-block window, reveal is rejected (hash unavailable).
     const late = await deployFixture();
+    await seedVaultAndKeeper(signers.deployer, TVL, late);
     await syncWeight(late.tickets, late.ticketsAddress, signers.alice, 100);
     const lateDelay = Number(await late.draw.MIN_REVEAL_DELAY());
     const lateTarget = (await ethers.provider.getBlockNumber()) + lateDelay + 1;
-    await (await late.draw.commitDraw(lateTarget, PRIZE)).wait();
+    const lateTvl = await tvlProof(late.vault);
+    await (await late.draw.commitDraw(lateTarget, lateTvl.clear, lateTvl.proof)).wait();
     // Exhaust the 256-block hash window past revealBlock (not just past commit).
     for (let i = 0; i < lateDelay + 260; i++) {
       await ethers.provider.send("evm_mine", []);
@@ -215,14 +363,21 @@ describe("DrawManager", function () {
 
     const delay = Number(await draw.MIN_REVEAL_DELAY());
     const tooSoon = (await ethers.provider.getBlockNumber()) + delay + 1;
-    await expect(draw.commitDraw(tooSoon, PRIZE)).to.be.revertedWithCustomError(draw, "DrawIntervalNotElapsed");
+    const tvlSoon = await tvlProof();
+    await expect(draw.commitDraw(tooSoon, tvlSoon.clear, tvlSoon.proof)).to.be.revertedWithCustomError(
+      draw,
+      "DrawIntervalNotElapsed",
+    );
 
     const interval = Number(await draw.MIN_DRAW_INTERVAL());
     await ethers.provider.send("evm_increaseTime", [interval]);
     await ethers.provider.send("evm_mine", []);
 
+    await (await token.mint(signers.deployer.address, Number(EXPECTED_FIRST_PRIZE * 2n))).wait();
+
     const nextTarget = (await ethers.provider.getBlockNumber()) + delay + 1;
-    await expect(draw.commitDraw(nextTarget, PRIZE)).to.not.be.reverted;
+    const tvlNext = await tvlProof();
+    await expect(draw.commitDraw(nextTarget, tvlNext.clear, tvlNext.proof)).to.not.be.reverted;
   });
 
   it("keeps weights frozen after reveal until unfreezeWeights", async function () {
@@ -286,5 +441,25 @@ describe("DrawManager", function () {
     await expect(
       draw.connect(winner).revealWin(drawId, true, winnerDecrypt.decryptionProof),
     ).to.be.revertedWithCustomError(draw, "AlreadyWinRevealed");
+  });
+
+  it("reverts ZeroPrize when TVL decrypt is zero", async function () {
+    const empty = await deployFixture();
+    // Keeper approved but vault empty → tvlCleartext 0 → prize 0.
+    await (await empty.token.mint(signers.deployer.address, 1_000_000)).wait();
+    await (await empty.token.connect(signers.deployer).setOperator(empty.drawAddress, OPERATOR_UNTIL)).wait();
+
+    // totalDeposits starts as publicly decryptable zero from vault constructor.
+    const handle = await empty.vault.totalDeposits();
+    const result = await fhevm.publicDecrypt([handle]);
+    const clear = result.clearValues[handle] as bigint;
+    expect(clear).to.eq(0n);
+
+    const delay = Number(await empty.draw.MIN_REVEAL_DELAY());
+    const target = (await ethers.provider.getBlockNumber()) + delay + 1;
+    await expect(empty.draw.commitDraw(target, clear, result.decryptionProof)).to.be.revertedWithCustomError(
+      empty.draw,
+      "ZeroPrize",
+    );
   });
 });

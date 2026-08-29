@@ -29,6 +29,8 @@ Losing must resolve to an encrypted zero, never a revert — a revert-on-loss pa
 
 Optional `revealWin()` proves win/loss via a publicly decryptable `ebool` + `checkSignatures` and emits tier only — never the prize amount. Off by default; losers cannot pass verification.
 
+**Prize pot:** `commitDraw` verifies public vault TVL, sets `prize = tvl × elapsed / YIELD_DIVISOR`, and pulls that cUSDC from the committer into DrawManager. `claim(drawId)` pays winners from the pot (encrypted zero for losers). Do not skim vault principal.
+
 **This generalizes beyond the draw.** Any function where success/failure depends on an encrypted comparison (withdraw amount vs. balance, draw eligibility, anything else added later) resolves to a zero-value no-op on the failing branch via `FHE.select`, never a `require`/revert. Confirmed in `ConfidentialVault.withdraw()`: an oversized withdrawal silently transfers zero and leaves the balance unchanged rather than reverting. Treat this as the default for every new function that branches on encrypted state, not a special case for the draw.
 
 **Deposit/withdraw integration note:** the caller must call `setOperator(vaultAddress, ...)` on the underlying confidential asset before the vault can pull funds — the vault verifies the encrypted input, then pulls via the `euint64` `confidentialTransferFrom` overload. The Week 3 frontend deposit flow needs this operator-approval step before the first `deposit()` call, same shape as an ERC-20 `approve()` before `transferFrom()`. After deposit/withdraw the vault pushes TWAB to TicketEngine via `syncWeightFromVault`; that call **no-ops while frozen** so withdraw never fails during an active draw.

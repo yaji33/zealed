@@ -174,6 +174,7 @@ export function useDrawCycle() {
     revealed,
     revealBlock,
     lastCommitTimestamp,
+    minInterval: intervalSec,
     minRevealDelay: delayBlocks,
     maxRevealWindow: windowBlocks,
     blockNumber,

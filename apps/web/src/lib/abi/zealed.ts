@@ -106,6 +106,7 @@ export const ticketEngineAbi = [
 
 export const drawManagerAbi = [
   { type: "error", name: "InvalidTicketEngine", inputs: [] },
+  { type: "error", name: "InvalidVault", inputs: [] },
   { type: "error", name: "DrawNotCommitted", inputs: [] },
   { type: "error", name: "DrawPendingReveal", inputs: [] },
   { type: "error", name: "DrawAlreadyRevealed", inputs: [] },
@@ -120,6 +121,7 @@ export const drawManagerAbi = [
   { type: "error", name: "AlreadyChecked", inputs: [] },
   { type: "error", name: "NotRegistered", inputs: [] },
   { type: "error", name: "NotChecked", inputs: [] },
+  { type: "error", name: "AlreadyClaimed", inputs: [] },
   { type: "error", name: "AlreadyWinRevealed", inputs: [] },
   { type: "error", name: "NotAWinner", inputs: [] },
   {
@@ -159,6 +161,13 @@ export const drawManagerAbi = [
   },
   {
     type: "function",
+    name: "prizeOfDraw",
+    stateMutability: "view",
+    inputs: [{ name: "draw", type: "uint256" }],
+    outputs: [{ name: "prize", type: "uint64" }],
+  },
+  {
+    type: "function",
     name: "lastCommitTimestamp",
     stateMutability: "view",
     inputs: [],
@@ -187,11 +196,19 @@ export const drawManagerAbi = [
   },
   {
     type: "function",
+    name: "YIELD_DIVISOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "commitDraw",
     stateMutability: "nonpayable",
     inputs: [
       { name: "revealBlock_", type: "uint256" },
-      { name: "prizeAmount", type: "uint64" },
+      { name: "tvlCleartext", type: "uint64" },
+      { name: "tvlProof", type: "bytes" },
     ],
     outputs: [],
   },
@@ -224,6 +241,16 @@ export const drawManagerAbi = [
   },
   {
     type: "function",
+    name: "hasClaimed",
+    stateMutability: "view",
+    inputs: [
+      { name: "draw", type: "uint256" },
+      { name: "account", type: "address" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
     name: "winRevealed",
     stateMutability: "view",
     inputs: [
@@ -237,6 +264,13 @@ export const drawManagerAbi = [
     name: "checkIfWon",
     stateMutability: "nonpayable",
     inputs: [{ name: "_drawId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "claim",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "drawId_", type: "uint256" }],
     outputs: [],
   },
   {
@@ -288,6 +322,14 @@ export const drawManagerAbi = [
   {
     type: "event",
     name: "DrawChecked",
+    inputs: [
+      { name: "drawId", type: "uint256", indexed: true },
+      { name: "account", type: "address", indexed: true },
+    ],
+  },
+  {
+    type: "event",
+    name: "PrizeClaimed",
     inputs: [
       { name: "drawId", type: "uint256", indexed: true },
       { name: "account", type: "address", indexed: true },

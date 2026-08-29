@@ -23,13 +23,13 @@ After wrap, use the dashboard: **Approve the vault** (`setOperator` on cUSDCMock
 
 | Contract | Address | Explorer |
 |---|---|---|
-| ConfidentialVault | `0x8793b30f385Af66E09320F1AEB652025C0BaE584` | [Etherscan](https://sepolia.etherscan.io/address/0x8793b30f385Af66E09320F1AEB652025C0BaE584#code) |
-| TicketEngine | `0xDf7E69448F1803444a1d7986d19B2575fFB635a5` | [Etherscan](https://sepolia.etherscan.io/address/0xDf7E69448F1803444a1d7986d19B2575fFB635a5#code) |
-| DrawManager | `0xBE0607B1866fF62554CF267CA9357A9f733fFC88` | [Etherscan](https://sepolia.etherscan.io/address/0xBE0607B1866fF62554CF267CA9357A9f733fFC88#code) |
+| ConfidentialVault | `0x40715771C7ADC9bdB9359A19531c1c006691EB0F` | [Etherscan](https://sepolia.etherscan.io/address/0x40715771C7ADC9bdB9359A19531c1c006691EB0F#code) |
+| TicketEngine | `0xf1d3cb98993FBb9b6E5fa442Ac34A0b85727aE3F` | [Etherscan](https://sepolia.etherscan.io/address/0xf1d3cb98993FBb9b6E5fa442Ac34A0b85727aE3F#code) |
+| DrawManager | `0xd676418feeDF5E8a8448e24f67Bf7E0Fa86F32bc` | [Etherscan](https://sepolia.etherscan.io/address/0xd676418feeDF5E8a8448e24f67Bf7E0Fa86F32bc#code) |
 
-Deploy script (full trio: vault + TicketEngine + DrawManager, then wires `setTicketEngine` + `setDrawManager`): `packages/contracts/scripts/deploy-sepolia.ts`. Addresses also in `packages/contracts/deployments/sepolia.json`.
+Deploy script (full trio: vault + TicketEngine + DrawManager, then wires `setTicketEngine` + `setDrawManager`): `packages/contracts/scripts/deploy-sepolia.ts`. Addresses also in `packages/contracts/deployments/sepolia.json` and `apps/web/.env.example`.
 
-**Redeploy note (Aug 26, 2026):** `deploy-sepolia.ts` always deploys a fresh trio. TicketEngine index/freeze history and vault balances from the prior deployment do not carry over. DrawManager-only swaps are not possible today because `TicketEngine.setDrawManager` can only be called by the current DrawManager.
+**Redeploy note (Aug 29, 2026):** Fresh trio for yield-at-commit `DrawManager` (constructor takes vault; prize pot + `claim`). Prior vault balances and ticket indexes do not carry over. Copy the addresses from `.env.example` into `.env.local`, then restart `pnpm dev`. Keeper needs `setOperator(DrawManager)` on cUSDC and enough balance to fund each cycle's prize.
 
 ### Draw keeper flow (permissionless)
 
@@ -41,16 +41,16 @@ Both `commitDraw` and `revealDraw` are **permissionless** (no admin key). Produc
 pnpm keeper
 ```
 
-(`packages/contracts` → `hardhat run scripts/keeper-sepolia.ts --network sepolia`). It commits when `MIN_DRAW_INTERVAL` has elapsed (public prize **1 cUSDC**) and reveals after the reveal block. It does not call `checkIfWon`. The Claim **Complete draw** button stays as a fallback if the keeper is down.
+(`packages/contracts` → `hardhat run scripts/keeper-sepolia.ts --network sepolia`). It public-decrypts vault TVL, posts demo-scaled yield (`prize = tvl × elapsed / YIELD_DIVISOR`, ~1% of TVL per 20 minutes), pulls that cUSDC into the DrawManager pot, and reveals after the reveal block. The keeper must `setOperator(DrawManager)` on cUSDC and hold enough balance to fund the pot. It does not call `checkIfWon`. The Claim **Complete draw** button stays as a fallback if the keeper is down.
 
 The landing pool and the vault chart show the public countdown. Manual one-shot smoke:
 
 `packages/contracts/scripts/smoke-draw-sepolia.ts` (or `RUN_DRAW=1` on `smoke-sepolia.ts`).
 
-1. **`commitDraw(revealBlock, prizeAmount)`** — freezes TicketEngine weights (snapshot for the draw), bumps `drawId`, and picks a future `revealBlock`. Requires `revealBlock >= block.number + MIN_REVEAL_DELAY` (**5 blocks**, ~1 minute on Sepolia) and at least **`MIN_DRAW_INTERVAL` (20 minutes)** since the previous commit. Both values are demo-scaled; production would use a longer cadence (e.g. daily) and a wider commit-to-reveal gap.
+1. **`commitDraw(revealBlock, tvlCleartext, tvlProof)`** — verifies public TVL, computes yield prize, pulls that amount from the committer into the pot, freezes TicketEngine weights, bumps `drawId`, and picks a future `revealBlock`. Requires `revealBlock >= block.number + MIN_REVEAL_DELAY` (**5 blocks**, ~1 minute on Sepolia) and at least **`MIN_DRAW_INTERVAL` (20 minutes)** since the previous commit. Both values are demo-scaled; production would use a longer cadence (e.g. daily) and a wider commit-to-reveal gap. Sepolia cUSDC has no Aave yield — the keeper sponsors the pot; the formula is the yield function.
 2. Wait until the reveal block is mined (and within the 256-block `blockhash` window).
 3. **`revealDraw(totalTickets, decryptionProof)`** — public-decrypts total tickets, sets plaintext `r`, marks the draw settled. Weights stay frozen so `checkIfWon` cannot be gamed by post-reveal deposits that inflate a live Fenwick range against an already-finalized `r`.
-4. Users call **`checkIfWon`**, then user-decrypt their pending prize.
+4. Users call **`checkIfWon`**, user-decrypt their pending prize, then **`claim(drawId)`** to pull cUSDC from the pot (encrypted zero transfer if they lost).
 5. **`unfreezeWeights()`** (also permissionless) reopens ticket syncs, or the next `commitDraw` unfreezes-then-refreezes.
 
 Information leakage by design: `r`, prize size, and total tickets are public after reveal. Individual balances, weights, and win amounts stay encrypted unless the user decrypts or opts into `revealWin` (tier only).
@@ -171,7 +171,7 @@ pnpm --filter @zealed/contracts test
 **In scope for the Season 4 bounty submission (by Sep 5, 2026):**
 - Confidential deposit/withdraw vault — shipped
 - TicketEngine + pull-based draw settlement — shipped
-- Prize claim with client-side decryption — UI shipped (decrypt pending prize)
+- Prize claim with client-side decryption + on-chain `claim()` payout from the DrawManager pot
 - Public aggregate view + private wallet-gated dashboard — shipped (`apps/web`)
 - Optional post-win selective disclosure (`revealWin()`) — shipped (tier only, off by default)
 

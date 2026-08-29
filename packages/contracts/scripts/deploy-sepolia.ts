@@ -29,7 +29,7 @@ async function main() {
   console.log("TicketEngine:", ticketsAddress);
 
   const Draw = await ethers.getContractFactory("DrawManager");
-  const draw = await Draw.deploy(ticketsAddress);
+  const draw = await Draw.deploy(ticketsAddress, vaultAddress);
   await draw.waitForDeployment();
   const drawAddress = await draw.getAddress();
   console.log("DrawManager:", drawAddress);

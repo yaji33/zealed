@@ -3,8 +3,10 @@ pragma solidity ^0.8.27;
 
 import {FHE, ebool, euint64} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {IERC7984} from "@openzeppelin/confidential-contracts/interfaces/IERC7984.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
+import {ConfidentialVault} from "./ConfidentialVault.sol";
 import {TicketEngine} from "./TicketEngine.sol";
 
 /**
@@ -14,6 +16,11 @@ import {TicketEngine} from "./TicketEngine.sol";
  *      themselves: one O(log n) encrypted prefix-sum + one encrypted range comparison
  *      against the public random value `r`. Losing resolves to an encrypted zero via
  *      `FHE.select` (never a revert), so win/loss is not leaked through tx success.
+ *
+ *      Prize size is demo-scaled yield posted at commit: public TVL × elapsed /
+ *      YIELD_DIVISOR. The committer funds that amount in cUSDC into this contract's
+ *      pot; `claim` pays the winner (or encrypted zero for losers). Principal stays
+ *      in ConfidentialVault and is never locked.
  *
  *      Randomness: commit to a future block, reveal with that block's hash bounded by
  *      the publicly decrypted total ticket count. The committer cannot know `r` at
@@ -32,8 +39,19 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     /// @notice blockhash is only available for the most recent 256 blocks.
     uint256 public constant MAX_REVEAL_WINDOW = 256;
 
+    /// @notice Demo yield divisor: `prize = tvl * elapsed / YIELD_DIVISOR`.
+    /// @dev Calibrated so ~100 cUSDC × 20 minutes ≈ 1 cUSDC (~1% of TVL per interval).
+    ///      Not a real Aave APY — Sepolia cUSDC has no yield module; the keeper sponsors the pot.
+    uint256 public constant YIELD_DIVISOR = 120_000;
+
     /// @notice Ticket tree used for on-demand range computation.
     TicketEngine public immutable ticketEngine;
+
+    /// @notice Vault whose public TVL seeds the yield formula at commit.
+    ConfidentialVault public immutable vault;
+
+    /// @notice Confidential deposit asset (cUSDC / ERC-7984) held in the prize pot.
+    IERC7984 public immutable asset;
 
     /// @notice Current draw id (incremented on each commit).
     uint256 public drawId;
@@ -56,11 +74,17 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     /// @notice Public prize size for the current draw (aggregate disclosure).
     uint64 public prizeAmountPlain;
 
+    /// @notice Public prize per draw id (survives later commits for late claims).
+    mapping(uint256 draw => uint64 prize) public prizeOfDraw;
+
     /// @notice Single prize tier for the current protocol (ship-if-time selective disclosure).
     uint8 public constant TIER_MAIN = 1;
 
     /// @dev Per-draw, per-user guard — one checkIfWon attempt each.
     mapping(uint256 draw => mapping(address account => bool checked)) public hasChecked;
+
+    /// @notice Whether `account` has claimed the prize (or encrypted zero) for `draw`.
+    mapping(uint256 draw => mapping(address account => bool claimed)) public hasClaimed;
 
     /// @notice Whether `account` has optionally published a win for `draw` (off by default).
     mapping(uint256 draw => mapping(address account => bool revealed)) public winRevealed;
@@ -80,10 +104,14 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     /// @notice Emitted when a user checks the current draw. No win/loss or amount.
     event DrawChecked(uint256 indexed drawId, address indexed account);
 
+    /// @notice Emitted when a user claims (winner or silent zero). No amount.
+    event PrizeClaimed(uint256 indexed drawId, address indexed account);
+
     /// @notice Optional selective disclosure: address won a tier. No prize amount.
     event WinRevealed(uint256 indexed drawId, address indexed account, uint8 tier);
 
     error InvalidTicketEngine();
+    error InvalidVault();
     error DrawNotCommitted();
     error DrawPendingReveal();
     error DrawAlreadyRevealed();
@@ -98,26 +126,32 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
     error WrongDrawId();
     error NotRegistered();
     error NotChecked();
+    error AlreadyClaimed();
     error AlreadyWinRevealed();
     error NotAWinner();
 
     /**
      * @param ticketEngine_ Deployed TicketEngine (Fenwick ticket weights).
+     * @param vault_ Deployed ConfidentialVault (public TVL source + asset).
      */
-    constructor(address ticketEngine_) {
+    constructor(address ticketEngine_, address vault_) {
         if (ticketEngine_ == address(0)) revert InvalidTicketEngine();
+        if (vault_ == address(0)) revert InvalidVault();
         ticketEngine = TicketEngine(ticketEngine_);
+        vault = ConfidentialVault(vault_);
+        asset = vault.asset();
     }
 
     /**
-     * @notice Commit the next draw to a future blockhash randomness source.
+     * @notice Commit the next draw; prize is demo-scaled yield from public TVL × elapsed.
      * @param revealBlock_ Block number whose hash will seed `r` (must be >= now + MIN_REVEAL_DELAY).
-     * @param prizeAmount Public prize size credited to the winner (encrypted at claim time).
-     * @dev Freezes TicketEngine weights and marks total tickets publicly decryptable.
-     *      Anyone may call; the committer cannot predict `blockhash(revealBlock_)`.
+     * @param tvlCleartext Public decryption of `vault.totalDeposits()`.
+     * @param tvlProof KMS self-relay proof for `tvlCleartext`.
+     * @dev Freezes TicketEngine weights. Pulls `prize` cUSDC from `msg.sender` into this
+     *      contract's pot (`setOperator` required). Anyone may call; the committer cannot
+     *      predict `blockhash(revealBlock_)`. First draw uses `MIN_DRAW_INTERVAL` as elapsed.
      */
-    function commitDraw(uint256 revealBlock_, uint64 prizeAmount) external nonReentrant {
-        if (prizeAmount == 0) revert ZeroPrize();
+    function commitDraw(uint256 revealBlock_, uint64 tvlCleartext, bytes calldata tvlProof) external nonReentrant {
         if (revealBlock_ < block.number + MIN_REVEAL_DELAY) revert InvalidRevealBlock();
 
         // Allow a new commit only from idle (no open commit) or after the prior draw revealed.
@@ -126,6 +160,17 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         if (lastCommitTimestamp != 0 && block.timestamp < lastCommitTimestamp + MIN_DRAW_INTERVAL) {
             revert DrawIntervalNotElapsed();
         }
+
+        euint64 tvlHandle = vault.totalDeposits();
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = euint64.unwrap(tvlHandle);
+        FHE.checkSignatures(handles, abi.encode(tvlCleartext), tvlProof);
+
+        uint256 elapsed = lastCommitTimestamp == 0
+            ? MIN_DRAW_INTERVAL
+            : block.timestamp - lastCommitTimestamp;
+        uint64 prize = uint64((uint256(tvlCleartext) * elapsed) / YIELD_DIVISOR);
+        if (prize == 0) revert ZeroPrize();
 
         if (ticketEngine.frozen()) {
             ticketEngine.setFrozen(false);
@@ -137,14 +182,19 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         revealed = false;
         drawRandomValue = 0;
         totalTicketsPlain = 0;
-        prizeAmountPlain = prizeAmount;
+        prizeAmountPlain = prize;
+        prizeOfDraw[drawId] = prize;
         revealBlock = revealBlock_;
         lastCommitTimestamp = block.timestamp;
+
+        euint64 prizeEnc = FHE.asEuint64(prize);
+        FHE.allowTransient(prizeEnc, address(asset));
+        asset.confidentialTransferFrom(msg.sender, address(this), prizeEnc);
 
         ticketEngine.setFrozen(true);
         ticketEngine.makeTotalPubliclyDecryptable();
 
-        emit DrawCommitted(drawId, revealBlock_, prizeAmount);
+        emit DrawCommitted(drawId, revealBlock_, prize);
     }
 
     /**
@@ -208,12 +258,34 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         ebool wonFlag = FHE.makePubliclyDecryptable(inRange);
         _won[_drawId][msg.sender] = wonFlag;
 
-        euint64 prize = FHE.select(wonFlag, FHE.asEuint64(prizeAmountPlain), FHE.asEuint64(0));
+        euint64 prize = FHE.select(wonFlag, FHE.asEuint64(prizeOfDraw[_drawId]), FHE.asEuint64(0));
         FHE.allowThis(prize);
         FHE.allow(prize, msg.sender);
         _pendingPrize[msg.sender] = prize;
 
         emit DrawChecked(_drawId, msg.sender);
+    }
+
+    /**
+     * @notice Pays the caller's prize for `drawId_` from the pot (encrypted zero if they lost).
+     * @param drawId_ Draw previously checked via `checkIfWon`.
+     * @dev Does not revert on a loss — silent encrypted zero, same shape as oversized withdraw.
+     *      Marks claimed even on zero so the pot cannot be replayed. No amount in the event.
+     */
+    function claim(uint256 drawId_) external nonReentrant {
+        if (drawId_ == 0) revert WrongDrawId();
+        if (!hasChecked[drawId_][msg.sender]) revert NotChecked();
+        if (hasClaimed[drawId_][msg.sender]) revert AlreadyClaimed();
+
+        hasClaimed[drawId_][msg.sender] = true;
+
+        ebool wonFlag = _won[drawId_][msg.sender];
+        euint64 pay = FHE.select(wonFlag, FHE.asEuint64(prizeOfDraw[drawId_]), FHE.asEuint64(0));
+        FHE.allowThis(pay);
+        FHE.allowTransient(pay, address(asset));
+        asset.confidentialTransfer(msg.sender, pay);
+
+        emit PrizeClaimed(drawId_, msg.sender);
     }
 
     /**

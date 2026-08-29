@@ -36,7 +36,7 @@ export const btnSecondaryClass =
   "cursor-pointer appearance-none rounded border border-line/50 bg-transparent px-[1.15rem] py-[0.55rem] font-dm-sans font-medium text-ink disabled:cursor-not-allowed disabled:opacity-45";
 
 export const bannerClass =
-  "relative mt-4 rounded-lg bg-soft/80 px-[0.9rem] py-3 text-[0.92rem] text-muted";
+  "relative mt-4 rounded-lg bg-soft/80 px-[0.9rem] py-3 text-[0.92rem] leading-snug text-muted break-words";
 
 export const bannerWarnClass = `${bannerClass} text-[#f0c2b8]`;
 

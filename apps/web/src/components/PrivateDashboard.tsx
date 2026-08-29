@@ -3,9 +3,10 @@
 import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
 import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import RedeemOutlined from "@mui/icons-material/RedeemOutlined";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
   useAccount,
+  usePublicClient,
   useReadContract,
   useWriteContract,
   useWaitForTransactionReceipt,
@@ -13,7 +14,11 @@ import {
 import { addresses, contractsConfigured, OPERATOR_UNTIL } from "@/lib/config";
 import { drawManagerAbi, erc7984Abi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
 import { useFhevm } from "@/lib/fhe";
+import { DRAW_CHECK_GAS } from "@/lib/draw";
 import { formatUnits, parseUnits } from "@/lib/format";
+import { waitForOkTx } from "@/lib/waitForTx";
+import { noticeFromWalletError } from "@/lib/walletError";
+import { DrawCyclePanel } from "@/components/DrawCyclePanel";
 import {
   bannerClass,
   bannerOkClass,
@@ -38,7 +43,7 @@ import {
 } from "@/lib/uiClasses";
 import type { Hex } from "viem";
 
-type Status = { kind: "idle" | "ok" | "err"; text: string };
+type Status = { kind: "idle" | "ok" | "err" | "cancel"; text: string };
 type ActionTab = "deposit" | "withdraw" | "claim";
 type TabIcon = typeof ArrowDownwardOutlined;
 
@@ -50,6 +55,7 @@ const ACTION_TABS: { id: ActionTab; label: string; Icon: TabIcon }[] = [
 
 export function PrivateDashboard() {
   const { address, isConnected } = useAccount();
+  const publicClient = usePublicClient();
   const configured = contractsConfigured();
   const fhe = useFhevm();
   const { writeContractAsync, data: txHash, isPending: txPending } = useWriteContract();
@@ -84,21 +90,14 @@ export function PrivateDashboard() {
     address: draw,
     abi: drawManagerAbi,
     functionName: "drawId",
-    query: { enabled: Boolean(draw) },
+    query: { enabled: Boolean(draw), refetchInterval: 12_000 },
   });
 
   const { data: revealed } = useReadContract({
     address: draw,
     abi: drawManagerAbi,
     functionName: "revealed",
-    query: { enabled: Boolean(draw) },
-  });
-
-  const { data: ticketsFrozen } = useReadContract({
-    address: tickets,
-    abi: ticketEngineAbi,
-    functionName: "frozen",
-    query: { enabled: Boolean(tickets) },
+    query: { enabled: Boolean(draw), refetchInterval: 12_000 },
   });
 
   const { data: hasChecked, refetch: refetchChecked } = useReadContract({
@@ -125,6 +124,10 @@ export function PrivateDashboard() {
     query: { enabled: Boolean(tickets && address) },
   });
 
+  useEffect(() => {
+    setPrize(null);
+  }, [drawId]);
+
   const working = Boolean(busy) || txPending || txConfirming;
 
   const canDeposit = Boolean(isOperator && configured && isConnected);
@@ -140,29 +143,10 @@ export function PrivateDashboard() {
     (revealed !== undefined &&
       (!address || drawId === undefined || hasChecked !== undefined));
   const uncheckedSettledDraw = revealed === true && hasChecked === false;
-  const claimHasWork =
-    uncheckedSettledDraw ||
-    (hasChecked === true && prize !== 0n);
-  const claimQuiet = defaultReady && !claimHasWork;
   const defaultTab: ActionTab = uncheckedSettledDraw ? "claim" : "deposit";
   const activeTab: ActionTab | null = userTab ?? (defaultReady ? defaultTab : null);
 
   const positionDecrypted = balance !== null;
-
-  /** Path (b): open / closed-awaiting-reveal / settled-but-tickets-still-frozen. */
-  const drawPoolLine = useMemo(() => {
-    if (drawId === undefined || revealed === undefined || ticketsFrozen === undefined) {
-      return "Draw pool status loading…";
-    }
-    if (ticketsFrozen && !revealed) {
-      return `Draw #${drawId.toString()} closed, awaiting settlement`;
-    }
-    if (ticketsFrozen && revealed) {
-      return `Draw #${drawId.toString()} settled. Ticket slots reopen after unfreeze, or when the next draw commits`;
-    }
-    const nextId = revealed || drawId === 0n ? drawId + 1n : drawId;
-    return `Accepting deposits for draw #${nextId.toString()}`;
-  }, [drawId, revealed, ticketsFrozen]);
 
   async function withBusy(label: string, fn: () => Promise<void>) {
     setBusy(label);
@@ -170,10 +154,8 @@ export function PrivateDashboard() {
     try {
       await fn();
     } catch (err) {
-      setStatus({
-        kind: "err",
-        text: err instanceof Error ? err.message : "Transaction failed",
-      });
+      const notice = noticeFromWalletError(err, "Transaction failed");
+      setStatus({ kind: notice.kind, text: notice.text });
     } finally {
       setBusy(null);
     }
@@ -310,46 +292,53 @@ export function PrivateDashboard() {
     })) as Hex;
   }
 
+  async function decryptPendingPrize(): Promise<bigint> {
+    if (!draw) throw new Error("Draw manager is not configured.");
+    if (!publicClient) throw new Error("RPC client is not ready.");
+    const handle = (await publicClient.readContract({
+      address: draw,
+      abi: drawManagerAbi,
+      functionName: "getPendingPrize",
+      account: address,
+    })) as Hex;
+    const value = await fhe.userDecryptEuint64(handle, draw);
+    setPrize(value);
+    return value;
+  }
+
   async function onCheckIfWon() {
-    if (!draw || drawId === undefined) return;
+    if (!draw || drawId === undefined || !publicClient || !address) return;
     await withBusy("Checking draw…", async () => {
-      await writeContractAsync({
+      const hash = await writeContractAsync({
         address: draw,
         abi: drawManagerAbi,
         functionName: "checkIfWon",
         args: [drawId],
+        gas: DRAW_CHECK_GAS,
       });
+      await waitForOkTx(publicClient, hash);
       await refetchChecked();
+      setBusy("Reading prize…");
+      const value = await decryptPendingPrize();
       setStatus({
         kind: "ok",
-        text: "Check submitted. Decrypt your pending prize to see the result (zero if you lost).",
+        text:
+          value > 0n
+            ? "You won this draw. The amount is only readable on this device."
+            : "You did not win this draw. Your principal is unchanged.",
       });
     });
   }
 
   async function onDecryptPrize() {
-    if (!draw) return;
-    await withBusy("Decrypting pending prize…", async () => {
-      const { createPublicClient, http } = await import("viem");
-      const { activeChain } = await import("@/lib/wagmi.config");
-      const client = createPublicClient({
-        chain: activeChain,
-        transport: http(process.env.NEXT_PUBLIC_RPC_URL),
-      });
-      const handle = (await client.readContract({
-        address: draw,
-        abi: drawManagerAbi,
-        functionName: "getPendingPrize",
-        account: address,
-      })) as Hex;
-      const value = await fhe.userDecryptEuint64(handle, draw);
-      setPrize(value);
+    await withBusy("Reading prize…", async () => {
+      const value = await decryptPendingPrize();
       setStatus({
         kind: "ok",
         text:
-          value === 0n
-            ? "Encrypted zero. You did not win this draw, or have not checked yet."
-            : "Prize decrypted. Amount stays private to this wallet.",
+          value > 0n
+            ? "You won this draw. The amount is only readable on this device."
+            : "You did not win this draw. Your principal is unchanged.",
       });
     });
   }
@@ -401,7 +390,11 @@ export function PrivateDashboard() {
   }
 
   const statusBannerClass =
-    status.kind === "err" ? bannerWarnClass : status.kind === "ok" ? bannerOkClass : bannerClass;
+    status.kind === "err"
+      ? bannerWarnClass
+      : status.kind === "ok"
+        ? bannerOkClass
+        : bannerClass;
 
   function selectTab(next: ActionTab) {
     setUserTab(next);
@@ -464,6 +457,7 @@ export function PrivateDashboard() {
           <h3 className={statLabelClass}>Pending prize</h3>
           <p className={statValueClass}>
             {prize === null ? "••••" : formatUnits(prize)}
+            {prize !== null ? <span className={statUnitClass}>cUSDC</span> : null}
           </p>
         </article>
       </div>
@@ -614,89 +608,77 @@ export function PrivateDashboard() {
           role="tabpanel"
           aria-labelledby="action-tab-claim"
           hidden={activeTab !== "claim"}
-          className={`${actionPanelClass} ${activeTab === "claim" ? "" : "hidden"}`}
+          className={`relative flex flex-col gap-6 p-5 ${activeTab === "claim" ? "" : "hidden"}`}
         >
-          {claimQuiet ? (
-            <p className="!mb-0">
-              Nothing to claim right now, check back after the next draw settles.
-            </p>
-          ) : (
-            <>
-              <p className="m-0 text-[0.92rem] leading-relaxed text-muted">{drawPoolLine}</p>
-              <p>
-                Draw{" "}
-                <span className={monoClass}>
-                  #{drawId !== undefined ? drawId.toString() : "…"}
-                </span>
-                {" · "}
-                {revealed ? "settled" : "not settled yet"}
-                {" · "}
-                {hasChecked
-                  ? "already checked"
-                  : ticketIndex === undefined
-                    ? "…"
-                    : ticketIndex === 0n
-                      ? "no tickets (deposit first)"
-                      : "not checked"}
-              </p>
-              <div className="my-3 flex flex-wrap gap-2.5">
-                <button
-                  type="button"
-                  className={btnClass}
-                  disabled={
-                    !configured ||
-                    !revealed ||
-                    Boolean(hasChecked) ||
-                    working ||
-                    drawId === undefined ||
-                    !ticketIndex ||
-                    ticketIndex === 0n
-                  }
-                  onClick={() => void onCheckIfWon()}
-                >
-                  Check if I won
-                </button>
-                <button
-                  type="button"
-                  className={btnSecondaryClass}
-                  disabled={!privateReady || working}
-                  onClick={() => void onDecryptPrize()}
-                >
-                  Decrypt pending prize
-                </button>
+          <DrawCyclePanel />
+          {revealed ? (
+            <div className="flex flex-col gap-4 border-t border-line pt-5">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <p className="m-0 font-mono text-[0.68rem] tracking-[0.18em] text-ember/75">
+                    THIS DRAW
+                  </p>
+                  <p className="m-0 mt-2 font-dm-sans text-[1.15rem] font-medium text-ink">
+                    {hasChecked && prize !== null
+                      ? prize > 0n
+                        ? `You won draw #${drawId?.toString() ?? ""}`
+                        : `No prize on draw #${drawId?.toString() ?? ""}`
+                      : ticketIndex === 0n
+                        ? "Deposit to get a ticket"
+                        : `Draw #${drawId?.toString() ?? "…"} sealed`}
+                  </p>
+                </div>
+                {!hasChecked && ticketIndex !== undefined && ticketIndex > 0n ? (
+                  <button
+                    type="button"
+                    className={btnClass}
+                    disabled={
+                      !configured ||
+                      !revealed ||
+                      working ||
+                      drawId === undefined ||
+                      !ticketIndex
+                    }
+                    onClick={() => void onCheckIfWon()}
+                  >
+                    See if I won
+                  </button>
+                ) : hasChecked && prize === null ? (
+                  <button
+                    type="button"
+                    className={btnClass}
+                    disabled={!privateReady || working}
+                    onClick={() => void onDecryptPrize()}
+                  >
+                    Reveal result
+                  </button>
+                ) : null}
               </div>
-              <p className={statNoteClass}>
-                Claiming means decrypting your prize on this device. The amount stays private.
-              </p>
-              <label className={`${fieldClass} mt-4 flex flex-wrap items-center gap-3`}>
-                <input
-                  type="checkbox"
-                  checked={revealWinEnabled}
-                  onChange={(e) => setRevealWinEnabled(e.target.checked)}
-                  disabled={Boolean(alreadyWinRevealed)}
-                />
-                <span>
-                  Publish that I won (tier only, no amount)
-                  {alreadyWinRevealed ? " · already published" : ""}
-                </span>
-              </label>
-              <button
-                type="button"
-                className={btnSecondaryClass}
-                disabled={
-                  !revealWinEnabled ||
-                  !configured ||
-                  !hasChecked ||
-                  Boolean(alreadyWinRevealed) ||
-                  working ||
-                  drawId === undefined
-                }
-                onClick={() => void onRevealWin()}
-              >
-                Publish win
-              </button>
-            </>
-          )}
+              {hasChecked && prize !== null && prize > 0n ? (
+                alreadyWinRevealed ? (
+                  <p className="m-0 text-[0.88rem] text-muted">Win published (tier only)</p>
+                ) : (
+                  <label className="m-0 flex items-center gap-3 text-[0.88rem] text-muted">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 shrink-0 accent-mint"
+                      checked={revealWinEnabled}
+                      onChange={(e) => setRevealWinEnabled(e.target.checked)}
+                    />
+                    <span>Publish win (tier only)</span>
+                    <button
+                      type="button"
+                      className={btnSecondaryClass}
+                      disabled={!revealWinEnabled || !configured || working || drawId === undefined}
+                      onClick={() => void onRevealWin()}
+                    >
+                      Publish
+                    </button>
+                  </label>
+                )
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 

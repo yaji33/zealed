@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePublicClient } from "wagmi";
-import { useQuery } from "@tanstack/react-query";
+import { useDrawCycle } from "@/hooks/useDrawCycle";
 import { usePublicDrawData } from "@/hooks/usePublicDrawData";
 import { useVaultTvl } from "@/hooks/useVaultTvl";
 import { contractsConfigured } from "@/lib/config";
-import { formatUnits } from "@/lib/format";
+import { formatCountdown, formatUnits } from "@/lib/format";
 
 const COLS = 96;
 const ROWS = 18;
@@ -63,52 +62,11 @@ function formatCompactAmount(value: bigint): string {
   return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-function formatCountdown(totalSeconds: number): string {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  const pad = (v: number) => v.toString().padStart(2, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-
-const AVERAGE_BLOCK_SECONDS = 12;
-
 export function AsciiPoolField() {
   const configured = contractsConfigured();
-  const publicClient = usePublicClient();
   const { data: tvl } = useVaultTvl();
-  const { drawId, revealed, prizeAmountPlain, history } = usePublicDrawData();
-
-  const { data: blockNumber } = useQuery({
-    queryKey: ["landing-block-number"],
-    enabled: Boolean(publicClient && configured),
-    refetchInterval: 15_000,
-    queryFn: async () => (publicClient ? publicClient.getBlockNumber() : 0n),
-  });
-
-  const pendingRevealBlock = useMemo(() => {
-    if (drawId === undefined || revealed !== false) return undefined;
-    return history.find((row) => row.drawId === drawId)?.revealBlock;
-  }, [drawId, revealed, history]);
-
-  const [countdown, setCountdown] = useState<number | undefined>(undefined);
-
-  useEffect(() => {
-    if (pendingRevealBlock === undefined || blockNumber === undefined) {
-      setCountdown(undefined);
-      return;
-    }
-    const blocksLeft = pendingRevealBlock > blockNumber ? Number(pendingRevealBlock - blockNumber) : 0;
-    setCountdown(blocksLeft * AVERAGE_BLOCK_SECONDS);
-  }, [pendingRevealBlock, blockNumber]);
-
-  useEffect(() => {
-    if (countdown === undefined || countdown <= 0) return;
-    const timer = setInterval(() => {
-      setCountdown((prev) => (prev === undefined || prev <= 0 ? prev : prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [countdown]);
+  const { prizeAmountPlain } = usePublicDrawData();
+  const cycle = useDrawCycle();
 
   const bands = useMemo(buildBandGrid, []);
   const initialRows = useMemo(() => renderRows(bands, mulberry32(SEED ^ 0x9e3779b9)), [bands]);
@@ -136,14 +94,13 @@ export function AsciiPoolField() {
   const poolTotal = !configured || tvl === undefined ? undefined : tvl;
   const prize = !configured ? undefined : prizeAmountPlain;
 
-  const nextDrawText =
-    !configured || drawId === undefined
+  const nextDrawText = !configured
+    ? "--:--:--"
+    : cycle.phase === "loading"
       ? "--:--:--"
-      : revealed
-        ? "settled"
-        : countdown === undefined
-          ? "--:--:--"
-          : formatCountdown(countdown);
+      : cycle.phase === "missed"
+        ? "missed"
+        : formatCountdown(cycle.secondsRemaining);
 
   return (
     <div className="relative py-2">
@@ -176,7 +133,10 @@ export function AsciiPoolField() {
           <span className="font-mono text-[0.72rem] uppercase tracking-[0.14em] text-muted">
             Next draw
           </span>
-          <span className="font-mono text-[clamp(1.15rem,2.2vw,1.6rem)] tabular-nums text-ink">
+          <span
+            className="font-mono text-[clamp(1.15rem,2.2vw,1.6rem)] tabular-nums text-ink"
+            suppressHydrationWarning
+          >
             {nextDrawText}
           </span>
         </div>

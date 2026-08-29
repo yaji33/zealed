@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAccount } from "wagmi";
@@ -36,9 +37,7 @@ export function SiteHeader() {
               |
             </span>
             {isConnected && address ? (
-              <button type="button" className={btnWallet} onClick={() => void disconnectWallet()}>
-                {shorten(address)}
-              </button>
+              <WalletChip address={address} onDisconnect={disconnectWallet} />
             ) : (
               <button
                 type="button"
@@ -56,6 +55,65 @@ export function SiteHeader() {
         )}
       </div>
     </header>
+  );
+}
+
+function WalletChip({ address, onDisconnect }: { address: string; onDisconnect: () => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const label = shorten(address);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function onPointerDown(event: PointerEvent) {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        className={btnWallet}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {label}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-2 min-w-[11.5rem] rounded border border-line bg-surface py-1"
+        >
+          <p className="m-0 px-3 py-2 font-mono text-[0.8rem] text-muted">{label}</p>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full cursor-pointer appearance-none border-0 bg-transparent px-3 py-2 text-left font-dm-sans text-[0.85rem] font-medium text-ink hover:text-ember"
+            onClick={() => {
+              setOpen(false);
+              onDisconnect();
+            }}
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

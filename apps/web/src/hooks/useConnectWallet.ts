@@ -3,61 +3,37 @@
 import { useCallback, useState } from "react";
 import { usePathname } from "next/navigation";
 import { usePrivy } from "@privy-io/react-auth";
-import { UserRejectedRequestError } from "viem";
-
-function errorCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  if ("code" in err && typeof (err as { code: unknown }).code === "number") {
-    return (err as { code: number }).code;
-  }
-  if ("cause" in err) return errorCode((err as { cause: unknown }).cause);
-  return undefined;
-}
-
-function errorMessage(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  return "Could not connect wallet";
-}
+import { useDisconnect } from "wagmi";
+import { privyWalletList } from "@/lib/privy.config";
+import { noticeFromWalletError } from "@/lib/walletError";
 
 export function useConnectWallet() {
   const pathname = usePathname();
-  const { login, logout, ready } = usePrivy();
+  const { connectWallet: privyConnectWallet, ready } = usePrivy();
+  const { disconnect } = useDisconnect();
   const onDashboard = pathname.startsWith("/dashboard");
   const [localError, setLocalError] = useState<string | null>(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  const connectWallet = useCallback(async () => {
+  const connectWallet = useCallback(() => {
     if (!onDashboard || !ready) return;
     setLocalError(null);
-    setIsLoggingIn(true);
-    try {
-      await login();
-    } catch (err) {
-      const code = errorCode(err);
-      if (code === UserRejectedRequestError.code || code === 4001) {
-        setLocalError("Connection cancelled in the wallet.");
-        return;
-      }
-      setLocalError(errorMessage(err));
-    } finally {
-      setIsLoggingIn(false);
-    }
-  }, [login, onDashboard, ready]);
+    privyConnectWallet({ walletList: [...privyWalletList] });
+  }, [onDashboard, privyConnectWallet, ready]);
 
-  const disconnectWallet = useCallback(async () => {
+  const disconnectWallet = useCallback(() => {
     setLocalError(null);
     try {
-      await logout();
+      disconnect();
     } catch (err) {
-      setLocalError(errorMessage(err));
+      setLocalError(noticeFromWalletError(err, "Could not disconnect wallet").text);
     }
-  }, [logout]);
+  }, [disconnect]);
 
   return {
     connectWallet,
     disconnectWallet,
     canConnect: onDashboard && ready,
-    isPending: !ready || isLoggingIn,
+    isPending: !ready,
     ready,
     error: localError ? ({ message: localError } as Error) : null,
     connector: ready,

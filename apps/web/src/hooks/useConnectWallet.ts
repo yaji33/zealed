@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react";
 import { usePathname } from "next/navigation";
-import { useConnect } from "wagmi";
-import { ResourceUnavailableRpcError, UserRejectedRequestError } from "viem";
+import { usePrivy } from "@privy-io/react-auth";
+import { UserRejectedRequestError } from "viem";
 
 function errorCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") return undefined;
@@ -21,45 +21,45 @@ function errorMessage(err: unknown): string {
 
 export function useConnectWallet() {
   const pathname = usePathname();
-  const { connectAsync, connectors, isPending, error, reset } = useConnect();
-  const connector = connectors[0];
+  const { login, logout, ready } = usePrivy();
   const onDashboard = pathname.startsWith("/dashboard");
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const connectWallet = useCallback(async () => {
-    if (!onDashboard || !connector) return;
+    if (!onDashboard || !ready) return;
     setLocalError(null);
-    reset();
-
+    setIsLoggingIn(true);
     try {
-      await connectAsync({ connector });
+      await login();
     } catch (err) {
       const code = errorCode(err);
-
-      // MetaMask: previous connect still open / not resolved (−32002).
-      if (code === ResourceUnavailableRpcError.code || code === -32002) {
-        setLocalError(
-          "A wallet request is already pending. Open MetaMask, approve or reject it, then try again.",
-        );
-        return;
-      }
-
       if (code === UserRejectedRequestError.code || code === 4001) {
         setLocalError("Connection cancelled in the wallet.");
         return;
       }
+      setLocalError(errorMessage(err));
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }, [login, onDashboard, ready]);
 
+  const disconnectWallet = useCallback(async () => {
+    setLocalError(null);
+    try {
+      await logout();
+    } catch (err) {
       setLocalError(errorMessage(err));
     }
-  }, [connectAsync, connector, onDashboard, reset]);
-
-  const displayError = localError ?? (error ? errorMessage(error) : null);
+  }, [logout]);
 
   return {
     connectWallet,
-    canConnect: onDashboard && Boolean(connector),
-    isPending,
-    error: displayError ? ({ message: displayError } as Error) : null,
-    connector,
+    disconnectWallet,
+    canConnect: onDashboard && ready,
+    isPending: !ready || isLoggingIn,
+    ready,
+    error: localError ? ({ message: localError } as Error) : null,
+    connector: ready,
   };
 }

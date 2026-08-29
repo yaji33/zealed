@@ -26,11 +26,10 @@ const CusdcFaucetCard = dynamic(
 );
 
 export function FaucetApp() {
-  const { isConnected, status } = useAccount();
-  const { isPending: isConnectPending, ready } = useConnectWallet();
-  const checking = !ready || status === "connecting" || isConnectPending;
+  const { isConnected } = useAccount();
+  const { ready } = useConnectWallet();
 
-  if (checking) {
+  if (!ready) {
     return <AppPanel message="Checking wallet…" />;
   }
 

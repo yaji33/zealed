@@ -5,6 +5,12 @@ import { useAccount, usePublicClient, useReadContract } from "wagmi";
 import { addresses, faucetConfigured } from "@/lib/addresses";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
 
+export function wrappedCusdcQueryKey(
+  address: `0x${string}` | undefined,
+): readonly ["wrapped-cusdc", typeof addresses.underlying, typeof addresses.asset, `0x${string}` | undefined] {
+  return ["wrapped-cusdc", addresses.underlying, addresses.asset, address];
+}
+
 /**
  * Lifetime USDC sent from this wallet into the cUSDC wrapper (wraps are plaintext
  * Transfer events on the underlying mock). Converted to cUSDC via wrapper `rate()`.
@@ -24,7 +30,7 @@ export function useWrappedCusdc() {
   });
 
   const query = useQuery({
-    queryKey: ["wrapped-cusdc", underlying, wrapper, address],
+    queryKey: wrappedCusdcQueryKey(address),
     enabled: Boolean(configured && publicClient && underlying && wrapper && address),
     queryFn: async (): Promise<bigint> => {
       if (!publicClient || !underlying || !wrapper || !address) return 0n;

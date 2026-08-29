@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAccount,
@@ -8,11 +8,13 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { useWrappedCusdc } from "@/hooks/useWrappedCusdc";
+import { useWrappedCusdc, wrappedCusdcQueryKey } from "@/hooks/useWrappedCusdc";
 import { addresses, faucetConfigured } from "@/lib/addresses";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
 import { formatUnits, parseUnits } from "@/lib/format";
+import { noticeFromWalletError, type AppNotice } from "@/lib/walletError";
 import {
+  bannerClass,
   bannerOkClass,
   bannerWarnClass,
   btnClass,
@@ -47,8 +49,13 @@ export function CusdcFaucetCard() {
 
   const [wrapInput, setWrapInput] = useState("10");
   const [activeStep, setActiveStep] = useState<FaucetStep | null>(null);
-  const [stepError, setStepError] = useState<string | null>(null);
+  const [stepNotice, setStepNotice] = useState<AppNotice | null>(null);
   const [stepOk, setStepOk] = useState<string | null>(null);
+  const [confirmedAllowance, setConfirmedAllowance] = useState(0n);
+  const [confirmedWrapped, setConfirmedWrapped] = useState(0n);
+  const pendingApproveAmount = useRef(0n);
+  const pendingWrapAmount = useRef(0n);
+  const handledTx = useRef<`0x${string}` | undefined>(undefined);
 
   const { writeContractAsync, data: txHash, isPending: txPending, reset } = useWriteContract();
   const { isLoading: txConfirming, isSuccess: txSuccess } = useWaitForTransactionReceipt({
@@ -83,7 +90,6 @@ export function CusdcFaucetCard() {
   const {
     wrappedCusdc,
     isLoading: wrappedLoading,
-    isError: wrappedError,
     refetch: refetchWrapped,
   } = useWrappedCusdc();
 
@@ -101,59 +107,89 @@ export function CusdcFaucetCard() {
   }, [wrapInput]);
 
   const hasUnderlying = (underlyingBalance ?? 0n) > 0n;
-  const approvedEnough =
-    allowance !== undefined && wrapAmount > 0n && allowance >= wrapAmount;
-  const hasWrapped = wrappedCusdc > 0n;
+  const displayWrapped = wrappedCusdc > confirmedWrapped ? wrappedCusdc : confirmedWrapped;
+  const hasWrapped = displayWrapped > 0n;
+  const wrapOpen = hasUnderlying || activeStep === "wrap";
+  const effectiveAllowance =
+    (allowance ?? 0n) > confirmedAllowance ? (allowance ?? 0n) : confirmedAllowance;
+  const approvedEnough = wrapAmount > 0n && effectiveAllowance >= wrapAmount;
+  const minted = hasUnderlying || hasWrapped;
+
+  useEffect(() => {
+    setConfirmedAllowance(0n);
+    setConfirmedWrapped(0n);
+    handledTx.current = undefined;
+  }, [address]);
+
+  useEffect(() => {
+    if (!approvedEnough) setStepOk((text) => (text === "Wrapper approved." ? null : text));
+  }, [approvedEnough]);
 
   const mintState: StepState =
-    activeStep === "mint"
-      ? "current"
-      : hasUnderlying || hasWrapped
-        ? "complete"
-        : "current";
+    activeStep === "mint" ? "current" : minted ? "complete" : "current";
   const approveState: StepState =
     activeStep === "approve"
       ? "current"
-      : approvedEnough
-        ? "complete"
-        : hasUnderlying
-          ? "current"
-          : hasWrapped
-            ? "complete"
-            : "locked";
+      : !hasUnderlying
+        ? hasWrapped
+          ? "complete"
+          : "locked"
+        : approvedEnough
+          ? "complete"
+          : "current";
   const wrapState: StepState =
     activeStep === "wrap"
       ? "current"
-      : approvedEnough
-        ? "current"
-        : hasUnderlying
+      : hasWrapped && !hasUnderlying
+        ? "complete"
+        : !wrapOpen
           ? "locked"
-          : hasWrapped
-            ? "complete"
+          : approvedEnough
+            ? "current"
             : "locked";
 
   useEffect(() => {
-    if (!txSuccess || !activeStep) return;
+    if (!txSuccess || !activeStep || !txHash) return;
+    if (handledTx.current === txHash) return;
+    handledTx.current = txHash;
+    const step = activeStep;
     void (async () => {
-      await refetchUnderlyingBalance();
-      await refetchAllowance();
-      if (activeStep === "mint") {
-        setWrapInput(formatUnits(mintAmount, 6));
+      if (step === "mint") {
+        const balanceResult = await refetchUnderlyingBalance();
+        await refetchAllowance();
+        const bal = (balanceResult.data as bigint | undefined) ?? 0n;
+        setWrapInput(formatUnits(bal > 0n ? bal : mintAmount, 6));
         setStepOk(`Minted ${formatUnits(mintAmount, 6)} USDC.`);
-      } else if (activeStep === "approve") {
+      } else if (step === "approve") {
+        await refetchAllowance();
+        setConfirmedAllowance((prev) =>
+          pendingApproveAmount.current > prev ? pendingApproveAmount.current : prev,
+        );
         setStepOk("Wrapper approved.");
-      } else if (activeStep === "wrap") {
-        await queryClient.invalidateQueries({ queryKey: ["wrapped-cusdc"] });
-        await refetchWrapped();
+      } else if (step === "wrap") {
+        const added = pendingWrapAmount.current;
+        const divisor = rate && rate > 0n ? rate : 1n;
+        setConfirmedWrapped((prev) => prev + added / divisor);
+        queryClient.setQueryData(
+          wrappedCusdcQueryKey(address),
+          (old: bigint | undefined) => (old ?? 0n) + added,
+        );
+        setWrapInput("10");
         setStepOk("Wrapped to cUSDC. Approve the vault, then deposit.");
+        void refetchUnderlyingBalance();
+        void refetchAllowance();
+        void refetchWrapped();
       }
       setActiveStep(null);
       reset();
     })();
   }, [
     txSuccess,
+    txHash,
     activeStep,
+    address,
     mintAmount,
+    rate,
     queryClient,
     refetchUnderlyingBalance,
     refetchAllowance,
@@ -171,7 +207,7 @@ export function CusdcFaucetCard() {
 
   async function onMint() {
     if (!underlying || !address) return;
-    setStepError(null);
+    setStepNotice(null);
     setStepOk(null);
     setActiveStep("mint");
     try {
@@ -183,15 +219,22 @@ export function CusdcFaucetCard() {
       });
     } catch (err) {
       setActiveStep(null);
-      setStepError(err instanceof Error ? err.message : "Mint failed");
+      setStepNotice(noticeFromWalletError(err, "Mint failed"));
     }
   }
 
   async function onApprove() {
     if (!underlying || !wrapper) return;
-    setStepError(null);
+    const amount =
+      (underlyingBalance ?? 0n) > wrapAmount
+        ? (underlyingBalance ?? 0n)
+        : wrapAmount > 0n
+          ? wrapAmount
+          : mintAmount;
+    if (amount <= 0n) return;
+    pendingApproveAmount.current = amount;
+    setStepNotice(null);
     setStepOk(null);
-    const amount = wrapAmount > 0n ? wrapAmount : mintAmount;
     setActiveStep("approve");
     try {
       await writeContractAsync({
@@ -202,13 +245,14 @@ export function CusdcFaucetCard() {
       });
     } catch (err) {
       setActiveStep(null);
-      setStepError(err instanceof Error ? err.message : "Approve failed");
+      setStepNotice(noticeFromWalletError(err, "Approve failed"));
     }
   }
 
   async function onWrap() {
     if (!wrapper || !address || wrapAmount <= 0n) return;
-    setStepError(null);
+    pendingWrapAmount.current = wrapAmount;
+    setStepNotice(null);
     setStepOk(null);
     setActiveStep("wrap");
     try {
@@ -220,7 +264,7 @@ export function CusdcFaucetCard() {
       });
     } catch (err) {
       setActiveStep(null);
-      setStepError(err instanceof Error ? err.message : "Wrap failed");
+      setStepNotice(noticeFromWalletError(err, "Wrap failed"));
     }
   }
 
@@ -232,13 +276,8 @@ export function CusdcFaucetCard() {
     wrapState,
   });
 
-  const wrappedDisplay = !configured
-    ? "…"
-    : wrappedLoading
-      ? "…"
-      : wrappedError
-        ? "Unavailable"
-        : null;
+  const wrappedDisplay =
+    !configured || (wrappedLoading && displayWrapped === 0n) ? "…" : null;
 
   return (
     <section className={cardClass}>
@@ -287,7 +326,8 @@ export function CusdcFaucetCard() {
             index={2}
             title="Approve"
             state={approveState}
-            connectNext={wrapState !== "locked" || approveState === "complete"}
+            interactive={minted}
+            connectNext={wrapOpen || wrapState === "complete"}
           >
             <p>
               {approveState === "locked"
@@ -308,11 +348,19 @@ export function CusdcFaucetCard() {
             </button>
           </FaucetStepRow>
 
-          <FaucetStepRow index={3} title="Wrap to cUSDC" state={wrapState} connectNext={false}>
+          <FaucetStepRow
+            index={3}
+            title="Wrap to cUSDC"
+            state={wrapState}
+            interactive={wrapOpen}
+            connectNext={false}
+          >
             <p>
               {wrapState === "locked"
-                ? "Unlocks after you approve."
-                : "Convert approved USDC into confidential cUSDC."}
+                ? "Unlocks after you mint."
+                : wrapState === "complete"
+                  ? "Ready when you mint more USDC."
+                  : "Convert approved USDC into confidential cUSDC."}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Status: {hasWrapped ? "Wrapped" : "Not wrapped yet"}
@@ -324,14 +372,18 @@ export function CusdcFaucetCard() {
                 value={wrapInput}
                 onChange={(e) => setWrapInput(e.target.value)}
                 inputMode="decimal"
-                disabled={working || wrapState === "locked"}
+                disabled={working || !wrapOpen}
               />
             </label>
             <button
               type="button"
-              className={btnClass}
+              className={hasWrapped && !hasUnderlying ? btnSecondaryClass : btnClass}
               disabled={
-                working || wrapState === "locked" || !approvedEnough || wrapAmount <= 0n || !configured
+                working ||
+                !hasUnderlying ||
+                !approvedEnough ||
+                wrapAmount <= 0n ||
+                !configured
               }
               onClick={() => void onWrap()}
             >
@@ -351,7 +403,7 @@ export function CusdcFaucetCard() {
           <p className={statValueClass}>
             {wrappedDisplay ?? (
               <>
-                {formatUnits(wrappedCusdc)}
+                {formatUnits(displayWrapped)}
                 <span className={statUnitClass}>cUSDC</span>
               </>
             )}
@@ -361,7 +413,9 @@ export function CusdcFaucetCard() {
       </div>
 
       {stepOk && <p className={bannerOkClass}>{stepOk}</p>}
-      {stepError && <p className={bannerWarnClass}>{stepError}</p>}
+      {stepNotice && (
+        <p className={stepNotice.kind === "err" ? bannerWarnClass : bannerClass}>{stepNotice.text}</p>
+      )}
     </section>
   );
 }
@@ -371,21 +425,23 @@ function FaucetStepRow({
   title,
   state,
   connectNext,
+  interactive = false,
   children,
 }: {
   index: number;
   title: string;
   state: StepState;
   connectNext: boolean;
+  interactive?: boolean;
   children: ReactNode;
 }) {
-  const locked = state === "locked";
+  const dimmed = state === "locked" && !interactive;
   const current = state === "current";
 
   return (
     <li
       className={`relative flex gap-4 transition-opacity duration-300 ${
-        locked ? "opacity-40" : "opacity-100"
+        dimmed ? "opacity-40" : "opacity-100"
       }`}
       aria-current={current ? "step" : undefined}
     >
@@ -408,7 +464,7 @@ function FaucetStepRow({
         <h3 className="relative mb-1 mt-0.5 font-dm-sans text-[1.1rem] font-medium text-ink">
           {title}
         </h3>
-        <fieldset disabled={locked} className="m-0 min-w-0 border-0 p-0">
+        <fieldset disabled={dimmed} className="m-0 min-w-0 border-0 p-0">
           {children}
         </fieldset>
       </div>
@@ -468,9 +524,9 @@ function flowStatus({
   if (working && activeStep === "mint") return "Minting";
   if (working && activeStep === "approve") return "Waiting for approval";
   if (working && activeStep === "wrap") return "Wrapping";
+  if (wrapState === "complete") return "Wrapped";
   if (wrapState === "current") return "Ready to wrap";
   if (approveState === "current") return "Waiting for approval";
   if (mintState === "current") return "Ready to mint";
-  if (wrapState === "complete") return "Wrapped";
   return "Ready to mint";
 }

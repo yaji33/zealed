@@ -1,170 +1,144 @@
 "use client";
 
-import { useMemo } from "react";
-import { usePublicClient, useReadContract } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
-import { addresses } from "@/lib/config";
-import { drawManagerAbi } from "@/lib/abi/zealed";
-import { getContractEventsChunked } from "@/lib/contractEvents";
+import { useBlockNumber, useReadContract, usePublicClient } from "wagmi";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
+import { drawManagerAbi, prizePoolAbi } from "@/lib/abi/zealed";
+import { PRIZE_TIERS } from "@/hooks/usePrizePoolData";
 
 export type DrawHistoryRow = {
   drawId: bigint;
-  revealBlock: bigint;
+  startTime: number;
+  endTime: number;
+  claimDeadline: number;
   prizeAmount: bigint;
   settled: boolean;
-  randomValue?: bigint;
-  totalTickets?: bigint;
-  /** Approximate commit time from the commit tx block; may be undefined if RPC omits it. */
-  committedAt?: number;
+  reconciled: boolean;
 };
 
+type DrawTuple = readonly [
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+  boolean,
+  boolean,
+  boolean,
+  boolean,
+];
+
+export function adaptDrawHistoryRow(
+  drawId: bigint,
+  state: DrawTuple,
+  prizeAmount: bigint,
+): DrawHistoryRow {
+  return {
+    drawId,
+    startTime: Number(state[1]),
+    endTime: Number(state[3]),
+    claimDeadline: Number(state[5]),
+    prizeAmount,
+    settled: state[7],
+    reconciled: state[9],
+  };
+}
+
+const READ_MS = 12_000;
+
+/** Public draw history. Prize totals are aggregate tier allocations, never user outcomes. */
 export function usePublicDrawData() {
-  const publicClient = usePublicClient();
-  const drawManager = addresses.drawManager;
+  const client = usePublicClient();
+  const { selected } = useVaultDirectory();
+  const drawManager = selected?.drawManager;
+  const prizePool = selected?.prizePool;
+  const enabled = Boolean(selected);
 
   const { data: drawId } = useReadContract({
     address: drawManager,
     abi: drawManagerAbi,
     functionName: "drawId",
-    query: { enabled: Boolean(drawManager) },
+    query: { enabled, refetchInterval: READ_MS },
   });
-
-  const { data: revealed } = useReadContract({
-    address: drawManager,
-    abi: drawManagerAbi,
-    functionName: "revealed",
-    query: { enabled: Boolean(drawManager) },
-  });
-
-  const { data: prizeAmountPlain } = useReadContract({
-    address: drawManager,
-    abi: drawManagerAbi,
-    functionName: "prizeAmountPlain",
-    query: { enabled: Boolean(drawManager) },
-  });
-
-  const { data: totalTicketsPlain } = useReadContract({
-    address: drawManager,
-    abi: drawManagerAbi,
-    functionName: "totalTicketsPlain",
-    query: { enabled: Boolean(drawManager) },
-  });
-
-  const { data: revealBlock } = useReadContract({
-    address: drawManager,
-    abi: drawManagerAbi,
-    functionName: "revealBlock",
-    query: { enabled: Boolean(drawManager) },
+  const { data: blockNumber } = useBlockNumber({
+    watch: true,
+    query: { enabled, refetchInterval: READ_MS },
   });
 
   const historyQuery = useQuery({
-    queryKey: ["draw-history", drawManager, drawId?.toString(), revealed, prizeAmountPlain?.toString()],
-    enabled: Boolean(publicClient && drawManager && drawId !== undefined && revealed !== undefined),
-    staleTime: 15_000,
-    refetchInterval: 20_000,
+    queryKey: [
+      "draw-history",
+      drawManager,
+      prizePool,
+      drawId?.toString(),
+      blockNumber?.toString(),
+    ],
+    enabled: Boolean(
+      enabled && client && drawManager && prizePool && drawId !== undefined,
+    ),
+    staleTime: 8_000,
+    refetchInterval: READ_MS,
     queryFn: async (): Promise<DrawHistoryRow[]> => {
-      if (!publicClient || !drawManager) return [];
-
-      const [committed, revealedEvents] = await Promise.all([
-        getContractEventsChunked(publicClient, {
-          address: drawManager,
-          abi: drawManagerAbi,
-          eventName: "DrawCommitted",
-        }),
-        getContractEventsChunked(publicClient, {
-          address: drawManager,
-          abi: drawManagerAbi,
-          eventName: "DrawRevealed",
-        }),
-      ]);
-
-      const revealedById = new Map<string, (typeof revealedEvents)[number]>();
-      for (const ev of revealedEvents) {
-        const id = (ev.args as { drawId?: bigint }).drawId;
-        if (id !== undefined) revealedById.set(id.toString(), ev);
-      }
-
-      const rows: DrawHistoryRow[] = [];
-      for (const ev of committed) {
-        const args = ev.args as {
-          drawId?: bigint;
-          revealBlock?: bigint;
-          prizeAmount?: bigint;
-        };
-        if (args.drawId === undefined || args.revealBlock === undefined || args.prizeAmount === undefined) {
-          continue;
-        }
-        const match = revealedById.get(args.drawId.toString());
-        const revealedArgs = match?.args as
-          | { randomValue?: bigint; totalTickets?: bigint }
-          | undefined;
-
-        let committedAt: number | undefined;
-        if (ev.blockNumber !== undefined) {
-          try {
-            const block = await publicClient.getBlock({ blockNumber: ev.blockNumber });
-            committedAt = Number(block.timestamp);
-          } catch {
-            committedAt = undefined;
-          }
-        }
-
-        rows.push({
-          drawId: args.drawId,
-          revealBlock: args.revealBlock,
-          prizeAmount: args.prizeAmount,
-          settled: Boolean(match),
-          randomValue: revealedArgs?.randomValue,
-          totalTickets: revealedArgs?.totalTickets,
-          committedAt,
-        });
-      }
-
       if (
-        drawId !== undefined &&
-        drawId > 0n &&
-        revealed === true &&
-        prizeAmountPlain !== undefined &&
-        prizeAmountPlain > 0n
-      ) {
-        const current = rows.find((row) => row.drawId === drawId);
-        if (current) {
-          current.settled = true;
-          if (current.prizeAmount === 0n) current.prizeAmount = prizeAmountPlain;
-        } else {
-          rows.push({
-            drawId,
-            revealBlock: revealBlock ?? 0n,
-            prizeAmount: prizeAmountPlain,
-            settled: true,
-          });
-        }
-      }
+        !client ||
+        !drawManager ||
+        !prizePool ||
+        drawId === undefined ||
+        drawId === 0n
+      )
+        return [];
+      const ids = Array.from({ length: Number(drawId) }, (_, index) =>
+        BigInt(index + 1),
+      );
+      const states = await client.multicall({
+        allowFailure: true,
+        contracts: ids.map((id) => ({
+          address: drawManager,
+          abi: drawManagerAbi,
+          functionName: "draws" as const,
+          args: [id] as const,
+        })),
+      });
+      const allocations = await client.multicall({
+        allowFailure: true,
+        contracts: ids.flatMap((id) =>
+          PRIZE_TIERS.map((tier) => ({
+            address: prizePool,
+            abi: prizePoolAbi,
+            functionName: "prizePerSlot" as const,
+            args: [id, tier.id] as const,
+          })),
+        ),
+      });
 
-      return rows.sort((a, b) => Number(b.drawId - a.drawId));
+      return ids
+        .flatMap((id, index) => {
+          const stateResult = states[index];
+          if (stateResult?.status !== "success") return [];
+          const state = stateResult.result;
+          const prizeAmount = PRIZE_TIERS.reduce((sum, tier, tierIndex) => {
+            const result = allocations[index * PRIZE_TIERS.length + tierIndex];
+            const perSlot =
+              result?.status === "success" ? BigInt(result.result) : 0n;
+            return sum + perSlot * BigInt(tier.slots);
+          }, 0n);
+          return [adaptDrawHistoryRow(id, state, prizeAmount)];
+        })
+        .sort((a, b) => Number(b.drawId - a.drawId));
     },
   });
 
-  const totals = useMemo(() => {
-    const rows = historyQuery.data ?? [];
-    const settled = rows.filter((r) => r.settled);
-    const totalPrizes = settled.reduce((acc, r) => acc + r.prizeAmount, 0n);
-    // In this protocol, yield is distributed as prizes — public prize sum is the yield signal.
-    return {
-      totalPrizesPaid: totalPrizes,
-      totalYieldGenerated: totalPrizes,
-      settledDrawCount: settled.length,
-    };
-  }, [historyQuery.data]);
-
+  const settled = (historyQuery.data ?? []).filter((row) => row.settled);
   return {
     drawId,
-    revealed,
-    prizeAmountPlain,
-    totalTicketsPlain,
     history: historyQuery.data ?? [],
     historyLoading: historyQuery.isLoading,
     historyError: historyQuery.error,
-    ...totals,
+    totalPrizesAllocated: settled.reduce(
+      (sum, row) => sum + row.prizeAmount,
+      0n,
+    ),
+    settledDrawCount: settled.length,
   };
 }

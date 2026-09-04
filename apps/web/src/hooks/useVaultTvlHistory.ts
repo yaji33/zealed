@@ -3,11 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
 import type { Hex } from "viem";
-import { addresses } from "@/lib/config";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { vaultAbi } from "@/lib/abi/zealed";
 import { getContractEventsChunked } from "@/lib/contractEvents";
 import { getFhevmInstance } from "@/lib/relayerSdk";
-import { cleartextToBigint, isZeroHandle, readClearValue } from "@/lib/publicDecrypt";
+import {
+  cleartextToBigint,
+  isZeroHandle,
+  readClearValue,
+} from "@/lib/publicDecrypt";
 
 const MAX_SAMPLES = 16;
 
@@ -47,9 +51,7 @@ function sampleBlocks(blocks: bigint[], max: number): bigint[] {
   return picked;
 }
 
-async function decryptHandles(
-  handles: Hex[],
-): Promise<Map<string, bigint>> {
+async function decryptHandles(handles: Hex[]): Promise<Map<string, bigint>> {
   const unique = [...new Set(handles.filter((h) => !isZeroHandle(h)))];
   const values = new Map<string, bigint>();
   if (unique.length === 0) return values;
@@ -59,7 +61,10 @@ async function decryptHandles(
   try {
     const result = await instance.publicDecrypt(unique);
     for (const handle of unique) {
-      const value = readClearValue(result.clearValues as Record<string, unknown>, handle);
+      const value = readClearValue(
+        result.clearValues as Record<string, unknown>,
+        handle,
+      );
       if (value !== undefined) values.set(handle, value);
     }
     if (values.size > 0) return values;
@@ -70,7 +75,10 @@ async function decryptHandles(
   const settled = await Promise.allSettled(
     unique.map(async (handle) => {
       const result = await instance.publicDecrypt([handle]);
-      const value = readClearValue(result.clearValues as Record<string, unknown>, handle);
+      const value = readClearValue(
+        result.clearValues as Record<string, unknown>,
+        handle,
+      );
       if (value === undefined) {
         const raw = result.clearValues[handle];
         return [handle, cleartextToBigint(raw)] as const;
@@ -92,7 +100,8 @@ async function decryptHandles(
  */
 export function useVaultTvlHistory() {
   const publicClient = usePublicClient();
-  const vault = addresses.vault;
+  const { selected } = useVaultDirectory();
+  const vault = selected?.vault;
 
   return useQuery({
     queryKey: ["vault-tvl-history", vault],
@@ -160,11 +169,15 @@ export function useVaultTvlHistory() {
       const ends = [points[0], points[points.length - 1]].filter(
         (p): p is VaultTvlPoint => Boolean(p),
       );
-      const uniqueEnds = [...new Map(ends.map((p) => [p.blockNumber.toString(), p])).values()];
+      const uniqueEnds = [
+        ...new Map(ends.map((p) => [p.blockNumber.toString(), p])).values(),
+      ];
       await Promise.all(
         uniqueEnds.map(async (point) => {
           try {
-            const block = await publicClient.getBlock({ blockNumber: point.blockNumber });
+            const block = await publicClient.getBlock({
+              blockNumber: point.blockNumber,
+            });
             point.timestamp = Number(block.timestamp);
           } catch {
             // Axis labels stay optional.

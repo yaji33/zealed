@@ -3,25 +3,47 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBlockNumber, useReadContract } from "wagmi";
-import { addresses } from "@/lib/config";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { drawManagerAbi } from "@/lib/abi/zealed";
-import { AVERAGE_BLOCK_SECONDS } from "@/lib/draw";
 
 export type DrawCyclePhase =
   | "loading"
-  | "interval"
   | "open"
-  | "awaiting-reveal"
-  | "settle"
-  | "missed";
+  | "ready-to-close"
+  | "awaiting-award"
+  | "claiming"
+  | "reconciliation";
 
 const DEFAULT_INTERVAL = 20n * 60n;
-const DEFAULT_REVEAL_DELAY = 5n;
-const DEFAULT_REVEAL_WINDOW = 256n;
 const READ_MS = 12_000;
 
+export function deriveDrawPhase(input: {
+  configured: boolean;
+  loaded: boolean;
+  nowSec: number;
+  closeAt: number;
+  claimDeadline: bigint;
+  closed: boolean;
+  awarded: boolean;
+  reconciliationPrepared: boolean;
+  reconciled: boolean;
+}): DrawCyclePhase {
+  if (!input.configured || !input.loaded) return "loading";
+  if (!input.closed)
+    return input.nowSec >= input.closeAt ? "ready-to-close" : "open";
+  if (!input.awarded) return "awaiting-award";
+  if (
+    !input.reconciliationPrepared &&
+    input.nowSec <= Number(input.claimDeadline)
+  )
+    return "claiming";
+  if (!input.reconciled) return "reconciliation";
+  return "open";
+}
+
 export function useDrawCycle() {
-  const draw = addresses.drawManager;
+  const { selected } = useVaultDirectory();
+  const draw = selected?.drawManager;
   const queryClient = useQueryClient();
   const enabled = Boolean(draw);
 
@@ -32,26 +54,13 @@ export function useDrawCycle() {
     query: { enabled, refetchInterval: READ_MS },
   });
 
-  const { data: revealed, refetch: refetchRevealed } = useReadContract({
-    address: draw,
-    abi: drawManagerAbi,
-    functionName: "revealed",
-    query: { enabled, refetchInterval: READ_MS },
-  });
-
-  const { data: revealBlock, refetch: refetchRevealBlock } = useReadContract({
-    address: draw,
-    abi: drawManagerAbi,
-    functionName: "revealBlock",
-    query: { enabled, refetchInterval: READ_MS },
-  });
-
-  const { data: lastCommitTimestamp, refetch: refetchLastCommit } = useReadContract({
-    address: draw,
-    abi: drawManagerAbi,
-    functionName: "lastCommitTimestamp",
-    query: { enabled, refetchInterval: READ_MS },
-  });
+  const { data: periodStartTime, refetch: refetchPeriodStart } =
+    useReadContract({
+      address: draw,
+      abi: drawManagerAbi,
+      functionName: "periodStartTime",
+      query: { enabled, refetchInterval: READ_MS },
+    });
 
   const { data: minInterval } = useReadContract({
     address: draw,
@@ -60,123 +69,105 @@ export function useDrawCycle() {
     query: { enabled },
   });
 
-  const { data: minRevealDelay } = useReadContract({
+  const { data: claimWindow } = useReadContract({
     address: draw,
     abi: drawManagerAbi,
-    functionName: "MIN_REVEAL_DELAY",
+    functionName: "CLAIM_WINDOW",
     query: { enabled },
   });
 
-  const { data: maxRevealWindow } = useReadContract({
+  const { data: drawState, refetch: refetchDrawState } = useReadContract({
     address: draw,
     abi: drawManagerAbi,
-    functionName: "MAX_REVEAL_WINDOW",
-    query: { enabled },
+    functionName: "draws",
+    args: drawId !== undefined && drawId > 0n ? [drawId] : undefined,
+    query: {
+      enabled: enabled && drawId !== undefined && drawId > 0n,
+      refetchInterval: READ_MS,
+    },
   });
 
   const { data: blockNumber } = useBlockNumber({
     query: { enabled, refetchInterval: READ_MS },
+    watch: true,
   });
 
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
-  const [revealSeconds, setRevealSeconds] = useState(0);
-
   useEffect(() => {
-    const id = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
+    const id = window.setInterval(
+      () => setNowSec(Math.floor(Date.now() / 1000)),
+      1000,
+    );
     return () => window.clearInterval(id);
   }, []);
 
   const intervalSec = minInterval ?? DEFAULT_INTERVAL;
-  const delayBlocks = minRevealDelay ?? DEFAULT_REVEAL_DELAY;
-  const windowBlocks = maxRevealWindow ?? DEFAULT_REVEAL_WINDOW;
-
-  const pending = drawId !== undefined && drawId > 0n && revealed === false;
-  const idle = drawId === 0n || revealed === true;
-
-  const nextCommitAt =
-    lastCommitTimestamp === undefined || lastCommitTimestamp === 0n
-      ? 0
-      : Number(lastCommitTimestamp) + Number(intervalSec);
-
-  const blocksLeft =
-    pending && revealBlock !== undefined && blockNumber !== undefined && revealBlock > blockNumber
-      ? Number(revealBlock - blockNumber)
-      : 0;
+  const closeAt = Number(periodStartTime ?? 0n) + Number(intervalSec);
+  const closed = drawState?.[6] ?? false;
+  const awarded = drawState?.[7] ?? false;
+  const reconciliationPrepared = drawState?.[8] ?? false;
+  const reconciled = drawState?.[9] ?? false;
+  const claimDeadline = drawState?.[5] ?? 0n;
 
   const phase: DrawCyclePhase = useMemo(() => {
-    if (!enabled) return "loading";
-    if (drawId === undefined || revealed === undefined || lastCommitTimestamp === undefined) {
-      return "loading";
-    }
-    if (pending) {
-      if (blockNumber === undefined || revealBlock === undefined) return "loading";
-      if (blockNumber <= revealBlock) return "awaiting-reveal";
-      if (blockNumber > revealBlock + windowBlocks) return "missed";
-      return "settle";
-    }
-    if (!idle) return "loading";
-    return nowSec >= nextCommitAt ? "open" : "interval";
+    return deriveDrawPhase({
+      configured: enabled,
+      loaded: drawId !== undefined && periodStartTime !== undefined,
+      nowSec,
+      closeAt,
+      claimDeadline,
+      closed,
+      awarded,
+      reconciliationPrepared,
+      reconciled,
+    });
   }, [
-    blockNumber,
+    awarded,
+    claimDeadline,
+    closeAt,
+    closed,
     drawId,
     enabled,
-    idle,
-    lastCommitTimestamp,
-    nextCommitAt,
     nowSec,
-    pending,
-    revealBlock,
-    revealed,
-    windowBlocks,
+    periodStartTime,
+    reconciliationPrepared,
+    reconciled,
   ]);
 
-  useEffect(() => {
-    if (phase !== "awaiting-reveal") {
-      setRevealSeconds(0);
-      return;
-    }
-    setRevealSeconds(blocksLeft * AVERAGE_BLOCK_SECONDS);
-  }, [phase, blocksLeft]);
-
-  useEffect(() => {
-    if (phase !== "awaiting-reveal") return;
-    const id = window.setInterval(() => {
-      setRevealSeconds((s) => (s <= 0 ? 0 : s - 1));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [phase, blocksLeft]);
-
   const secondsRemaining =
-    phase === "interval"
-      ? Math.max(0, nextCommitAt - nowSec)
-      : phase === "awaiting-reveal"
-        ? revealSeconds
+    phase === "open"
+      ? Math.max(0, closeAt - nowSec)
+      : phase === "claiming"
+        ? Math.max(0, Number(claimDeadline) - nowSec)
         : 0;
 
   const clockLabel = useMemo(() => {
-    if (phase === "missed") return "Reveal window missed";
-    return "Next draw";
+    if (phase === "claiming") return "Claim window";
+    if (phase === "ready-to-close") return "Ready to close";
+    if (phase === "awaiting-award") return "Awaiting award";
+    if (phase === "reconciliation") return "Reconciliation";
+    return "Draw closes";
   }, [phase]);
 
   const refetch = useCallback(async () => {
     await Promise.all([
       refetchDrawId(),
-      refetchRevealed(),
-      refetchRevealBlock(),
-      refetchLastCommit(),
+      refetchPeriodStart(),
+      refetchDrawState(),
       queryClient.invalidateQueries({ queryKey: ["draw-history"] }),
+      queryClient.invalidateQueries({ queryKey: ["vault-tvl"] }),
+      queryClient.invalidateQueries({ queryKey: ["prize-pool"] }),
     ]);
-  }, [queryClient, refetchDrawId, refetchLastCommit, refetchRevealBlock, refetchRevealed]);
+  }, [queryClient, refetchDrawId, refetchDrawState, refetchPeriodStart]);
 
   return {
     phase,
     drawId,
-    revealed,
-    revealBlock,
-    lastCommitTimestamp,
+    drawState,
+    periodStartTime,
     minInterval: intervalSec,
-    minRevealDelay: delayBlocks,
-    maxRevealWindow: windowBlocks,
+    claimWindow,
+    claimDeadline,
     blockNumber,
     secondsRemaining,
     clockLabel,

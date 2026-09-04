@@ -4,16 +4,16 @@ import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
 
 const ROWS = [
   {
-    public: "Pool total",
+    public: "Principal TVL (aggregate)",
     sealed: "Your deposit and balance",
   },
   {
-    public: "Prize size for each draw",
+    public: "Tier allocations, reserve, slot counts",
     sealed: "Your odds of winning",
   },
   {
-    public: "Draw schedule and the random value",
-    sealed: "Whether you won or lost",
+    public: "Draw lifecycle and snapshot version",
+    sealed: "Whether you won or lost a slot",
   },
   {
     public: "Verified contract code",

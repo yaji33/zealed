@@ -8,8 +8,8 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
-import { useWrappedCusdc, wrappedCusdcQueryKey } from "@/hooks/useWrappedCusdc";
-import { addresses, faucetConfigured } from "@/lib/addresses";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
+import { useWrappedAsset, wrappedAssetQueryKey } from "@/hooks/useWrappedAsset";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
 import { formatUnits, parseUnits } from "@/lib/format";
 import { noticeFromWalletError, type AppNotice } from "@/lib/walletError";
@@ -30,24 +30,19 @@ import {
   statUnitClass,
 } from "@/lib/uiClasses";
 
-/** Default faucet size in cUSDC units (6 decimals). Under Zama's 1M public mint cap. */
-const DEFAULT_CUSDC_UNITS = 10_000_000n; // 10 cUSDC
+const DEFAULT_FAUCET_AMOUNT = "100";
 
 type FaucetStep = "mint" | "approve" | "wrap";
 type StepState = "complete" | "current" | "locked";
 
-/**
- * Mint mock USDC → approve cUSDCMock wrapper → wrap to cUSDC.
- * Addresses from smoke-sepolia.ts / Zama Sepolia protocol-apps docs.
- */
+/** Mint, approve, and wrap the public mock backing the selected confidential asset. */
 export function CusdcFaucetCard() {
   const { address, isConnected } = useAccount();
   const queryClient = useQueryClient();
-  const underlying = addresses.underlying;
-  const wrapper = addresses.asset;
-  const configured = faucetConfigured();
+  const { selected } = useVaultDirectory();
+  const wrapper = selected?.asset;
 
-  const [wrapInput, setWrapInput] = useState("10");
+  const [wrapInput, setWrapInput] = useState("100");
   const [activeStep, setActiveStep] = useState<FaucetStep | null>(null);
   const [stepNotice, setStepNotice] = useState<AppNotice | null>(null);
   const [stepOk, setStepOk] = useState<string | null>(null);
@@ -57,10 +52,16 @@ export function CusdcFaucetCard() {
   const pendingWrapAmount = useRef(0n);
   const handledTx = useRef<`0x${string}` | undefined>(undefined);
 
-  const { writeContractAsync, data: txHash, isPending: txPending, reset } = useWriteContract();
-  const { isLoading: txConfirming, isSuccess: txSuccess } = useWaitForTransactionReceipt({
-    hash: txHash,
-  });
+  const {
+    writeContractAsync,
+    data: txHash,
+    isPending: txPending,
+    reset,
+  } = useWriteContract();
+  const { isLoading: txConfirming, isSuccess: txSuccess } =
+    useWaitForTransactionReceipt({
+      hash: txHash,
+    });
   const working = txPending || txConfirming;
   const minting = activeStep === "mint" && working;
 
@@ -70,14 +71,51 @@ export function CusdcFaucetCard() {
     functionName: "rate",
     query: { enabled: Boolean(wrapper) },
   });
-
-  const { data: underlyingBalance, refetch: refetchUnderlyingBalance } = useReadContract({
+  const { data: underlying } = useReadContract({
+    address: wrapper,
+    abi: erc7984Abi,
+    functionName: "underlying",
+    query: { enabled: Boolean(wrapper) },
+  });
+  const { data: wrapperDecimals } = useReadContract({
+    address: wrapper,
+    abi: erc7984Abi,
+    functionName: "decimals",
+    query: { enabled: Boolean(wrapper) },
+  });
+  const { data: wrapperSymbol } = useReadContract({
+    address: wrapper,
+    abi: erc7984Abi,
+    functionName: "symbol",
+    query: { enabled: Boolean(wrapper) },
+  });
+  const { data: underlyingDecimals } = useReadContract({
     address: underlying,
     abi: underlyingErc20Abi,
-    functionName: "balanceOf",
-    args: address ? [address] : undefined,
-    query: { enabled: Boolean(underlying && address) },
+    functionName: "decimals",
+    query: { enabled: Boolean(underlying) },
   });
+  const { data: underlyingSymbol } = useReadContract({
+    address: underlying,
+    abi: underlyingErc20Abi,
+    functionName: "symbol",
+    query: { enabled: Boolean(underlying) },
+  });
+  const configured = Boolean(selected && wrapper && underlying);
+  const confidentialLabel =
+    wrapperSymbol ?? selected?.label ?? "confidential token";
+  const underlyingLabel = underlyingSymbol ?? "underlying token";
+  const confidentialDecimals = wrapperDecimals ?? 6;
+  const publicDecimals = underlyingDecimals ?? 6;
+
+  const { data: underlyingBalance, refetch: refetchUnderlyingBalance } =
+    useReadContract({
+      address: underlying,
+      abi: underlyingErc20Abi,
+      functionName: "balanceOf",
+      args: address ? [address] : undefined,
+      query: { enabled: Boolean(underlying && address) },
+    });
 
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     address: underlying,
@@ -88,30 +126,33 @@ export function CusdcFaucetCard() {
   });
 
   const {
-    wrappedCusdc,
+    wrappedAmount,
     isLoading: wrappedLoading,
     refetch: refetchWrapped,
-  } = useWrappedCusdc();
+  } = useWrappedAsset({ account: address, underlying, wrapper, rate });
 
   const mintAmount = useMemo(() => {
     const r = rate ?? 1n;
-    return DEFAULT_CUSDC_UNITS * r;
-  }, [rate]);
+    return parseUnits(DEFAULT_FAUCET_AMOUNT, confidentialDecimals) * r;
+  }, [confidentialDecimals, rate]);
 
   const wrapAmount = useMemo(() => {
     try {
-      return parseUnits(wrapInput || "0", 6);
+      return parseUnits(wrapInput || "0", publicDecimals);
     } catch {
       return 0n;
     }
-  }, [wrapInput]);
+  }, [publicDecimals, wrapInput]);
 
   const hasUnderlying = (underlyingBalance ?? 0n) > 0n;
-  const displayWrapped = wrappedCusdc > confirmedWrapped ? wrappedCusdc : confirmedWrapped;
+  const displayWrapped =
+    wrappedAmount > confirmedWrapped ? wrappedAmount : confirmedWrapped;
   const hasWrapped = displayWrapped > 0n;
   const wrapOpen = hasUnderlying || activeStep === "wrap";
   const effectiveAllowance =
-    (allowance ?? 0n) > confirmedAllowance ? (allowance ?? 0n) : confirmedAllowance;
+    (allowance ?? 0n) > confirmedAllowance
+      ? (allowance ?? 0n)
+      : confirmedAllowance;
   const approvedEnough = wrapAmount > 0n && effectiveAllowance >= wrapAmount;
   const minted = hasUnderlying || hasWrapped;
 
@@ -119,10 +160,14 @@ export function CusdcFaucetCard() {
     setConfirmedAllowance(0n);
     setConfirmedWrapped(0n);
     handledTx.current = undefined;
-  }, [address]);
+    setStepNotice(null);
+    setStepOk(null);
+    setWrapInput(DEFAULT_FAUCET_AMOUNT);
+  }, [address, underlying, wrapper]);
 
   useEffect(() => {
-    if (!approvedEnough) setStepOk((text) => (text === "Wrapper approved." ? null : text));
+    if (!approvedEnough)
+      setStepOk((text) => (text === "Wrapper approved." ? null : text));
   }, [approvedEnough]);
 
   const mintState: StepState =
@@ -158,12 +203,16 @@ export function CusdcFaucetCard() {
         const balanceResult = await refetchUnderlyingBalance();
         await refetchAllowance();
         const bal = (balanceResult.data as bigint | undefined) ?? 0n;
-        setWrapInput(formatUnits(bal > 0n ? bal : mintAmount, 6));
-        setStepOk(`Minted ${formatUnits(mintAmount, 6)} USDC.`);
+        setWrapInput(formatUnits(bal > 0n ? bal : mintAmount, publicDecimals));
+        setStepOk(
+          `Minted ${formatUnits(mintAmount, publicDecimals)} ${underlyingLabel}.`,
+        );
       } else if (step === "approve") {
         await refetchAllowance();
         setConfirmedAllowance((prev) =>
-          pendingApproveAmount.current > prev ? pendingApproveAmount.current : prev,
+          pendingApproveAmount.current > prev
+            ? pendingApproveAmount.current
+            : prev,
         );
         setStepOk("Wrapper approved.");
       } else if (step === "wrap") {
@@ -171,11 +220,13 @@ export function CusdcFaucetCard() {
         const divisor = rate && rate > 0n ? rate : 1n;
         setConfirmedWrapped((prev) => prev + added / divisor);
         queryClient.setQueryData(
-          wrappedCusdcQueryKey(address),
+          wrappedAssetQueryKey(underlying, wrapper, address),
           (old: bigint | undefined) => (old ?? 0n) + added,
         );
-        setWrapInput("10");
-        setStepOk("Wrapped to cUSDC. Approve the vault, then deposit.");
+        setWrapInput(DEFAULT_FAUCET_AMOUNT);
+        setStepOk(
+          `Wrapped to ${confidentialLabel}. Approve the selected vault, then deposit.`,
+        );
         void refetchUnderlyingBalance();
         void refetchAllowance();
         void refetchWrapped();
@@ -189,6 +240,11 @@ export function CusdcFaucetCard() {
     activeStep,
     address,
     mintAmount,
+    publicDecimals,
+    underlyingLabel,
+    confidentialLabel,
+    underlying,
+    wrapper,
     rate,
     queryClient,
     refetchUnderlyingBalance,
@@ -281,14 +337,15 @@ export function CusdcFaucetCard() {
 
   return (
     <section className={cardClass}>
-      <h2 className={sectionTitleClass}>Get cUSDC</h2>
+      <h2 className={sectionTitleClass}>Get {confidentialLabel}</h2>
       <p className={`${ledeClass} mt-2`}>
-        Mint test USDC and wrap it into cUSDC, so you can deposit.
+        Mint test {underlyingLabel} and wrap it into {confidentialLabel}, so you
+        can deposit.
       </p>
 
       {!configured && (
         <p className={bannerWarnClass}>
-          Set the wrapper and underlying addresses in <code>.env.local</code> first.
+          Select a registered confidential vault with a supported wrapper first.
         </p>
       )}
 
@@ -296,28 +353,35 @@ export function CusdcFaucetCard() {
         <ol className="relative m-0 list-none p-0">
           <FaucetStepRow
             index={1}
-            title="Mint USDC"
+            title={`Mint ${underlyingLabel}`}
             state={mintState}
             connectNext={approveState !== "locked" || mintState === "complete"}
           >
-            <p>Public mint on the Zama Sepolia mock USDC.</p>
+            <p>Public mint on the selected Zama Sepolia mock asset.</p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Balance:{" "}
               {underlyingBalance === undefined
                 ? "…"
-                : `${formatUnits(underlyingBalance, 6)} USDC`}
+                : `${formatUnits(underlyingBalance, publicDecimals)} ${underlyingLabel}`}
             </p>
             <button
               type="button"
-              className={mintState === "complete" ? btnSecondaryClass : btnClass}
+              className={
+                mintState === "complete" ? btnSecondaryClass : btnClass
+              }
               disabled={working || !configured}
               onClick={() => void onMint()}
             >
-              {labelFor("mint", mintState === "complete" ? "Mint more" : "Mint USDC")}
+              {labelFor(
+                "mint",
+                mintState === "complete"
+                  ? "Mint more"
+                  : `Mint ${underlyingLabel}`,
+              )}
             </button>
             {minting && (
               <p className="sr-only" aria-live="polite">
-                Minting USDC
+                Minting {underlyingLabel}
               </p>
             )}
           </FaucetStepRow>
@@ -332,25 +396,36 @@ export function CusdcFaucetCard() {
             <p>
               {approveState === "locked"
                 ? "Unlocks after you mint."
-                : "Allow the wrapper to pull the USDC you minted."}
+                : `Allow the wrapper to pull the ${underlyingLabel} you minted.`}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Status:{" "}
-              {allowance === undefined ? "…" : approvedEnough ? "Approved" : "Not approved"}
+              {allowance === undefined
+                ? "…"
+                : approvedEnough
+                  ? "Approved"
+                  : "Not approved"}
             </p>
             <button
               type="button"
               className={btnSecondaryClass}
-              disabled={working || approveState === "locked" || approvedEnough || !configured}
+              disabled={
+                working ||
+                approveState === "locked" ||
+                approvedEnough ||
+                !configured
+              }
               onClick={() => void onApprove()}
             >
-              {approvedEnough ? "Approved" : labelFor("approve", "Approve wrapper")}
+              {approvedEnough
+                ? "Approved"
+                : labelFor("approve", "Approve wrapper")}
             </button>
           </FaucetStepRow>
 
           <FaucetStepRow
             index={3}
-            title="Wrap to cUSDC"
+            title={`Wrap to ${confidentialLabel}`}
             state={wrapState}
             interactive={wrapOpen}
             connectNext={false}
@@ -359,14 +434,14 @@ export function CusdcFaucetCard() {
               {wrapState === "locked"
                 ? "Unlocks after you mint."
                 : wrapState === "complete"
-                  ? "Ready when you mint more USDC."
-                  : "Convert approved USDC into confidential cUSDC."}
+                  ? `Ready when you mint more ${underlyingLabel}.`
+                  : `Convert approved ${underlyingLabel} into ${confidentialLabel}.`}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Status: {hasWrapped ? "Wrapped" : "Not wrapped yet"}
             </p>
             <label className={fieldClass}>
-              <span>Amount (USDC)</span>
+              <span>Amount ({underlyingLabel})</span>
               <input
                 className={monoClass}
                 value={wrapInput}
@@ -377,7 +452,9 @@ export function CusdcFaucetCard() {
             </label>
             <button
               type="button"
-              className={hasWrapped && !hasUnderlying ? btnSecondaryClass : btnClass}
+              className={
+                hasWrapped && !hasUnderlying ? btnSecondaryClass : btnClass
+              }
               disabled={
                 working ||
                 !hasUnderlying ||
@@ -387,7 +464,10 @@ export function CusdcFaucetCard() {
               }
               onClick={() => void onWrap()}
             >
-              {labelFor("wrap", hasWrapped ? "Wrap more" : "Wrap to cUSDC")}
+              {labelFor(
+                "wrap",
+                hasWrapped ? "Wrap more" : `Wrap to ${confidentialLabel}`,
+              )}
             </button>
           </FaucetStepRow>
         </ol>
@@ -403,8 +483,8 @@ export function CusdcFaucetCard() {
           <p className={statValueClass}>
             {wrappedDisplay ?? (
               <>
-                {formatUnits(displayWrapped)}
-                <span className={statUnitClass}>cUSDC</span>
+                {formatUnits(displayWrapped, confidentialDecimals)}
+                <span className={statUnitClass}>{confidentialLabel}</span>
               </>
             )}
           </p>
@@ -414,7 +494,11 @@ export function CusdcFaucetCard() {
 
       {stepOk && <p className={bannerOkClass}>{stepOk}</p>}
       {stepNotice && (
-        <p className={stepNotice.kind === "err" ? bannerWarnClass : bannerClass}>{stepNotice.text}</p>
+        <p
+          className={stepNotice.kind === "err" ? bannerWarnClass : bannerClass}
+        >
+          {stepNotice.text}
+        </p>
       )}
     </section>
   );

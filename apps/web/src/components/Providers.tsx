@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import { WagmiProvider } from "wagmi";
 import { AppLoadingOverlay } from "@/components/AppLoadingOverlay";
+import { VaultDirectoryProvider } from "@/components/VaultDirectoryProvider";
 import { privyConfig } from "@/lib/privy.config";
 import { getWagmiConfig } from "@/lib/wagmi.config";
 
@@ -14,7 +15,11 @@ function subscribe() {
 }
 
 function useIsClient() {
-  return useSyncExternalStore(subscribe, () => true, () => false);
+  return useSyncExternalStore(
+    subscribe,
+    () => true,
+    () => false,
+  );
 }
 
 export function Providers({
@@ -34,7 +39,7 @@ export function Providers({
     return (
       <QueryClientProvider client={queryClient}>
         <WagmiProvider config={config} reconnectOnMount={false}>
-          {children}
+          <VaultDirectoryProvider>{children}</VaultDirectoryProvider>
         </WagmiProvider>
       </QueryClientProvider>
     );
@@ -44,8 +49,10 @@ export function Providers({
     <PrivyProvider appId={appId} clientId={clientId} config={privyConfig}>
       <QueryClientProvider client={queryClient}>
         <PrivyWagmiProvider config={config} reconnectOnMount={false}>
-          <AppLoadingOverlay />
-          {children}
+          <VaultDirectoryProvider>
+            <AppLoadingOverlay />
+            {children}
+          </VaultDirectoryProvider>
         </PrivyWagmiProvider>
       </QueryClientProvider>
     </PrivyProvider>

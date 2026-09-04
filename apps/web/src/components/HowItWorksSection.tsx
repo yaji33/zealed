@@ -13,20 +13,20 @@ const STEPS = [
   },
   {
     number: "02",
-    title: "Yield funds the prize",
-    body: "Your principal is never at risk. Only the pool's yield is drawn for prizes.",
+    title: "Sponsor funds prizes",
+    body: "Mock yield enters PrizePool only. Principal never funds a tier.",
     visual: "yield" as const,
   },
   {
     number: "03",
-    title: "Draw settles",
-    body: "Winner selection runs onchain over encrypted balances.",
+    title: "Multi-tier draw",
+    body: "Each bounded slot stores encrypted FHE randomness; you check your own range.",
     visual: "draw" as const,
   },
   {
     number: "04",
     title: "Claim or withdraw",
-    body: "Unseal a win with your own key, or withdraw anytime.",
+    body: "Decrypt a slot result locally, claim privately, or withdraw anytime.",
     visual: "claim" as const,
   },
 ] as const;

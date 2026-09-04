@@ -2,6 +2,7 @@
 
 import { useConnectWallet } from "@/hooks/useConnectWallet";
 import { cardClass } from "@/lib/uiClasses";
+import { noticeFromWalletError } from "@/lib/walletError";
 
 export function WalletGate() {
   const { connectWallet, canConnect, isPending, error, ready } = useConnectWallet();
@@ -27,7 +28,11 @@ export function WalletGate() {
         >
           {isPending || !ready ? "Connecting…" : "Connect wallet"}
         </button>
-        {error && <p className="m-0 max-w-[28rem] text-[0.88rem] text-danger">{error.message}</p>}
+        {error && (
+          <p className="m-0 max-w-[28rem] text-[0.88rem] text-danger">
+            {noticeFromWalletError(error, "Wallet connection failed.").text}
+          </p>
+        )}
       </div>
     </section>
   );

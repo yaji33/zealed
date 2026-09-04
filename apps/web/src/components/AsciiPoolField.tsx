@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useDrawCycle } from "@/hooks/useDrawCycle";
-import { usePublicDrawData } from "@/hooks/usePublicDrawData";
+import { usePrizePoolData } from "@/hooks/usePrizePoolData";
 import { useVaultTvl } from "@/hooks/useVaultTvl";
-import { contractsConfigured } from "@/lib/config";
 import { formatCountdown, formatUnits } from "@/lib/format";
 
 const COLS = 96;
 const ROWS = 18;
-const SEED = 0x5ea1ed; 
+const SEED = 0x5ea1ed;
 
 const BANDS = ["", "·.:'`", "-=+x?", "%&#@"] as const;
 
@@ -57,19 +57,25 @@ function renderRows(bands: number[][], rand: () => number): string[] {
 function formatCompactAmount(value: bigint): string {
   const n = Number(formatUnits(value));
   if (!Number.isFinite(n)) return formatUnits(value);
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000_000)
+    return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 100_000) return `${(n / 1_000).toFixed(0)}K`;
   return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 export function AsciiPoolField() {
-  const configured = contractsConfigured();
+  const { selected } = useVaultDirectory();
+  const configured = Boolean(selected);
+  const assetLabel = selected?.label ?? "token";
   const { data: tvl } = useVaultTvl();
-  const { prizeAmountPlain } = usePublicDrawData();
+  const prizePool = usePrizePoolData();
   const cycle = useDrawCycle();
 
   const bands = useMemo(buildBandGrid, []);
-  const initialRows = useMemo(() => renderRows(bands, mulberry32(SEED ^ 0x9e3779b9)), [bands]);
+  const initialRows = useMemo(
+    () => renderRows(bands, mulberry32(SEED ^ 0x9e3779b9)),
+    [bands],
+  );
   const [rows, setRows] = useState<string[]>(initialRows);
   const rowsRef = useRef<string[][]>(initialRows.map((r) => r.split("")));
 
@@ -92,15 +98,18 @@ export function AsciiPoolField() {
   }, [bands]);
 
   const poolTotal = !configured || tvl === undefined ? undefined : tvl;
-  const prize = !configured ? undefined : prizeAmountPlain;
+  const prize = prizePool.data?.tiers.reduce(
+    (sum, tier) => sum + tier.allocation,
+    0n,
+  );
 
   const nextDrawText = !configured
     ? "--:--:--"
     : cycle.phase === "loading"
       ? "--:--:--"
-      : cycle.phase === "missed"
-        ? "missed"
-        : formatCountdown(cycle.secondsRemaining);
+      : cycle.phase === "open" || cycle.phase === "claiming"
+        ? formatCountdown(cycle.secondsRemaining)
+        : cycle.phase.replaceAll("-", " ");
 
   return (
     <div className="relative py-2">
@@ -113,20 +122,20 @@ export function AsciiPoolField() {
       <div className="absolute inset-0 flex flex-wrap items-center justify-evenly gap-4 max-[760px]:static max-[760px]:pt-3">
         <div className="flex flex-col items-center gap-1.5 px-7 py-4 text-center [background:radial-gradient(closest-side,rgba(10,10,10,0.92),rgba(10,10,10,0.55)_70%,transparent)] max-[760px]:bg-none max-[760px]:px-3 max-[760px]:py-2">
           <span className="font-mono text-[0.72rem] uppercase tracking-[0.14em] text-muted">
-            Pool total
+            Principal TVL
           </span>
           <span className="font-mono text-[clamp(1.15rem,2.2vw,1.6rem)] tabular-nums text-ink">
             {poolTotal === undefined ? "--" : formatCompactAmount(poolTotal)}{" "}
-            <span className="text-[0.7em] text-muted">cUSDC</span>
+            <span className="text-[0.7em] text-muted">{assetLabel}</span>
           </span>
         </div>
         <div className="flex flex-col items-center gap-1.5 px-7 py-4 text-center [background:radial-gradient(closest-side,rgba(10,10,10,0.92),rgba(10,10,10,0.55)_70%,transparent)] max-[760px]:bg-none max-[760px]:px-3 max-[760px]:py-2">
           <span className="font-mono text-[0.72rem] uppercase tracking-[0.14em] text-muted">
-            Current prize
+            Current tier allocations
           </span>
           <span className="font-mono text-[clamp(1.15rem,2.2vw,1.6rem)] tabular-nums text-ink">
             {prize === undefined ? "--" : formatCompactAmount(prize)}{" "}
-            <span className="text-[0.7em] text-muted">cUSDC</span>
+            <span className="text-[0.7em] text-muted">{assetLabel}</span>
           </span>
         </div>
         <div className="flex flex-col items-center gap-1.5 px-7 py-4 text-center [background:radial-gradient(closest-side,rgba(10,10,10,0.92),rgba(10,10,10,0.55)_70%,transparent)] max-[760px]:bg-none max-[760px]:px-3 max-[760px]:py-2">

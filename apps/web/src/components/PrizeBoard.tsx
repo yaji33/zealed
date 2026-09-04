@@ -1,0 +1,280 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  useAccount,
+  usePublicClient,
+  useReadContract,
+  useWriteContract,
+} from "wagmi";
+import type { Hex } from "viem";
+import { DrawCyclePanel } from "@/components/DrawCyclePanel";
+import { ExplorerTxLink } from "@/components/ExplorerTxLink";
+import { PrivateOddsPanel } from "@/components/PrivateOddsPanel";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
+import { usePrizePoolData } from "@/hooks/usePrizePoolData";
+import { drawManagerAbi } from "@/lib/abi/zealed";
+import { DRAW_CHECK_GAS, DRAW_CLAIM_GAS } from "@/lib/draw";
+import { useFhevm } from "@/lib/fhe";
+import { formatUnits } from "@/lib/format";
+import { waitForOkTx } from "@/lib/waitForTx";
+import { noticeFromWalletError } from "@/lib/walletError";
+import {
+  bannerClass,
+  bannerOkClass,
+  bannerWarnClass,
+  btnClass,
+  btnSecondaryClass,
+  ledeClass,
+  sectionTitleClass,
+} from "@/lib/uiClasses";
+
+type Notice = { kind: "idle" | "ok" | "err" | "cancel"; text: string };
+
+export function PrizeBoard() {
+  const pool = usePrizePoolData();
+  const { selected } = useVaultDirectory();
+  const configured = Boolean(selected);
+  const drawId = pool.data?.activeDrawId;
+  const assetLabel = selected?.label ?? "token";
+
+  return (
+    <section
+      className="mt-8 border-t border-line pt-8"
+      aria-labelledby="prize-board-title"
+    >
+      <h2 id="prize-board-title" className={sectionTitleClass}>
+        Private prize board
+      </h2>
+      <p className={`${ledeClass} mt-2 max-w-2xl`}>
+        Check one bounded slot at a time. The contract records an encrypted
+        result, then your wallet decrypts it locally before a claim.
+      </p>
+      <div className="mt-6 rounded-lg border border-edge bg-surface p-5">
+        <DrawCyclePanel />
+      </div>
+      {!configured ? (
+        <p className={bannerWarnClass}>
+          Prize checks will appear after the multi-tier contracts are
+          configured.
+        </p>
+      ) : pool.isLoading ? (
+        <p className={bannerClass}>Loading prize slots…</p>
+      ) : pool.isError || !pool.data ? (
+        <p className={bannerWarnClass}>
+          Prize slots could not be loaded. Try again shortly.
+        </p>
+      ) : drawId === undefined || drawId === 0n ? (
+        <p className={bannerClass}>No active awarded draw yet.</p>
+      ) : (
+        <div className="mt-6 space-y-6">
+          <PrivateOddsPanel drawId={drawId} />
+          {pool.data.tiers.map((tier) => (
+            <section key={tier.id} aria-labelledby={`tier-${tier.id}`}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3
+                  id={`tier-${tier.id}`}
+                  className="m-0 font-dm-sans text-lg font-medium text-ink"
+                >
+                  {tier.name}
+                </h3>
+                <p className="m-0 text-sm text-muted">
+                  {tier.slots} slot{tier.slots === 1 ? "" : "s"} ·{" "}
+                  {formatUnits(tier.prizePerSlot)} {assetLabel} each
+                </p>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {Array.from({ length: tier.slots }, (_, slot) => (
+                  <PrizeSlotCard
+                    key={slot}
+                    drawId={drawId}
+                    tier={tier.id}
+                    tierName={tier.name}
+                    slot={slot}
+                    assetLabel={assetLabel}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PrizeSlotCard({
+  drawId,
+  tier,
+  tierName,
+  slot,
+  assetLabel,
+}: {
+  drawId: bigint;
+  tier: number;
+  tierName: string;
+  slot: number;
+  assetLabel: string;
+}) {
+  const { address } = useAccount();
+  const client = usePublicClient();
+  const fhe = useFhevm();
+  const { selected } = useVaultDirectory();
+  const draw = selected?.drawManager;
+  const { writeContractAsync, data: txHash } = useWriteContract();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [prize, setPrize] = useState<bigint | null>(null);
+  const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "" });
+
+  const { data: checked, refetch: refetchChecked } = useReadContract({
+    address: draw,
+    abi: drawManagerAbi,
+    functionName: "hasChecked",
+    args: address ? [drawId, tier, slot, address] : undefined,
+    query: { enabled: Boolean(draw && address), refetchInterval: 12_000 },
+  });
+  const { data: claimed, refetch: refetchClaimed } = useReadContract({
+    address: draw,
+    abi: drawManagerAbi,
+    functionName: "hasClaimed",
+    args: address ? [drawId, tier, slot, address] : undefined,
+    query: { enabled: Boolean(draw && address), refetchInterval: 12_000 },
+  });
+
+  useEffect(() => {
+    setPrize(null);
+    setNotice({ kind: "idle", text: "" });
+  }, [draw, drawId]);
+
+  async function run(label: string, action: () => Promise<void>) {
+    setBusy(label);
+    setNotice({ kind: "idle", text: "" });
+    try {
+      await action();
+    } catch (error) {
+      const safe = noticeFromWalletError(
+        error,
+        "Prize action could not be completed.",
+      );
+      setNotice({ kind: safe.kind, text: safe.text });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function check() {
+    if (!draw || !client) return;
+    await run("Checking…", async () => {
+      const hash = await writeContractAsync({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "checkPrize",
+        args: [drawId, tier, slot],
+        gas: DRAW_CHECK_GAS,
+      });
+      await waitForOkTx(client, hash);
+      await refetchChecked();
+      setNotice({
+        kind: "ok",
+        text: "Encrypted result recorded. Decrypt it with your wallet.",
+      });
+    });
+  }
+
+  async function decrypt() {
+    if (!draw || !client || !address) return;
+    await run("Decrypting…", async () => {
+      const handle = (await client.readContract({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "getPendingPrize",
+        args: [drawId, tier, slot],
+        account: address,
+      })) as Hex;
+      const value = await fhe.userDecryptEuint64(handle, draw);
+      setPrize(value);
+      setNotice({
+        kind: "ok",
+        text:
+          value > 0n
+            ? `This slot awarded ${formatUnits(value)} ${assetLabel}. Claim it before the deadline.`
+            : "No prize in this slot. Your principal is unchanged.",
+      });
+    });
+  }
+
+  async function claim() {
+    if (!draw || !client) return;
+    await run("Claiming…", async () => {
+      const hash = await writeContractAsync({
+        address: draw,
+        abi: drawManagerAbi,
+        functionName: "claim",
+        args: [drawId, tier, slot],
+        gas: DRAW_CLAIM_GAS,
+      });
+      await waitForOkTx(client, hash);
+      await refetchClaimed();
+      setNotice({ kind: "ok", text: "Confidential prize claim confirmed." });
+    });
+  }
+
+  const noticeClass =
+    notice.kind === "ok"
+      ? bannerOkClass
+      : notice.kind === "cancel"
+        ? bannerClass
+        : bannerWarnClass;
+  return (
+    <article className="rounded-lg border border-edge bg-base p-4">
+      <p className="m-0 font-mono text-[0.68rem] tracking-[0.15em] text-muted">
+        {tierName.toUpperCase()} · SLOT {slot + 1}
+      </p>
+      <p className="mb-4 mt-3 text-sm text-muted" aria-live="polite">
+        {claimed
+          ? "Claimed"
+          : prize !== null
+            ? prize > 0n
+              ? "Winning result"
+              : "Checked · no prize"
+            : checked
+              ? "Encrypted result ready"
+              : "Not checked"}
+      </p>
+      {!checked ? (
+        <button
+          type="button"
+          className={btnSecondaryClass}
+          disabled={Boolean(busy)}
+          onClick={() => void check()}
+        >
+          {busy ?? "Check slot"}
+        </button>
+      ) : prize === null ? (
+        <button
+          type="button"
+          className={btnClass}
+          disabled={Boolean(busy)}
+          onClick={() => void decrypt()}
+        >
+          {busy ?? "Decrypt result"}
+        </button>
+      ) : prize > 0n && !claimed ? (
+        <button
+          type="button"
+          className={btnClass}
+          disabled={Boolean(busy)}
+          onClick={() => void claim()}
+        >
+          {busy ?? "Claim prize"}
+        </button>
+      ) : null}
+      {notice.kind !== "idle" ? (
+        <p className={`${noticeClass} text-xs`}>{notice.text}</p>
+      ) : null}
+      <div className="mt-3">
+        <ExplorerTxLink hash={txHash} />
+      </div>
+    </article>
+  );
+}

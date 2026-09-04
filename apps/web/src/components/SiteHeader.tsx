@@ -25,7 +25,7 @@ export function SiteHeader() {
           <Link href="/dashboard" className="text-2xl font-bold tracking-tight text-ink">
             Zealed
           </Link>
-          <nav className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
+          <nav aria-label="Primary" className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
             <Link
               href="/dashboard/faucet"
               className="text-ink"

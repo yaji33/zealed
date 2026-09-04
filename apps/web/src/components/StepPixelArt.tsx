@@ -135,9 +135,9 @@ function buildSphereShell(count: number): ShellPoint[] {
     const y0 = (rand() < 0.5 ? 1 : -1) * rand() ** poleBias;
     const ring = Math.sqrt(Math.max(0, 1 - y0 * y0));
     const jitter = 0.018;
-    let x = ring * Math.cos(theta) + (rand() - 0.5) * jitter;
-    let y = y0 + (rand() - 0.5) * jitter;
-    let z = ring * Math.sin(theta) + (rand() - 0.5) * jitter;
+    const x = ring * Math.cos(theta) + (rand() - 0.5) * jitter;
+    const y = y0 + (rand() - 0.5) * jitter;
+    const z = ring * Math.sin(theta) + (rand() - 0.5) * jitter;
     const len = Math.hypot(x, y, z) || 1;
 
     pts.push({
@@ -292,7 +292,12 @@ function waveDelay(dot: Dot, type: StepVisual): string {
   return `${dot.x * 28 + dot.y * 36}ms`;
 }
 
-function useRotator(enabled: boolean, speedY: number, baseX: number, wobbleX: number): Rotator {
+function useRotator(
+  enabled: boolean,
+  speedY: number,
+  baseX: number,
+  wobbleX: number,
+): Rotator {
   const [rotation, setRotation] = useState<Rotator>({ y: 0, x: baseX });
 
   useEffect(() => {
@@ -353,15 +358,34 @@ export function StepPixelArt({ type }: StepPixelArtProps) {
       );
     }
     return [];
-  }, [isDraw, isClaim, sphereMesh, lockMesh, rotation.y, rotation.x, lockRotation.y, lockRotation.x]);
+  }, [
+    isDraw,
+    isClaim,
+    sphereMesh,
+    lockMesh,
+    rotation.y,
+    rotation.x,
+    lockRotation.y,
+    lockRotation.x,
+  ]);
 
   const dots = isDraw || isClaim ? dynamicDots : staticDots;
-  const gridAnim = type === "deposit" ? "animate-step-breathe motion-reduce:animate-none" : undefined;
-  const dotsWave = isDraw || isClaim ? "" : "animate-step-dot-wave motion-reduce:animate-none";
+  const gridAnim =
+    type === "deposit"
+      ? "animate-step-breathe motion-reduce:animate-none"
+      : undefined;
+  const dotsWave =
+    isDraw || isClaim ? "" : "animate-step-dot-wave motion-reduce:animate-none";
 
   return (
-    <div className="mb-6 flex h-40 w-full items-center justify-center" aria-hidden="true">
-      <div className="origin-center" style={{ transform: `scale(${DISPLAY_SCALE})` }}>
+    <div
+      className="mb-6 flex h-40 w-full items-center justify-center"
+      aria-hidden="true"
+    >
+      <div
+        className="origin-center"
+        style={{ transform: `scale(${DISPLAY_SCALE})` }}
+      >
         <div className={`origin-center ${gridAnim ?? ""}`}>
           <div
             className="grid shrink-0"

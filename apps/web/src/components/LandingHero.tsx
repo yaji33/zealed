@@ -32,7 +32,7 @@ export function LandingHero() {
         <Link href="/" className="text-2xl font-bold tracking-tight text-ink">
           Zealed
         </Link>
-        <nav className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
+        <nav aria-label="Primary" className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
           <AnchorLink href="#how-it-works" className="text-ink">
             How it works
           </AnchorLink>

@@ -2,21 +2,13 @@
 
 import { useState } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
-import { bytesToHex, type Address, type Hex, type PublicClient } from "viem";
+import { ExplorerTxLink } from "@/components/ExplorerTxLink";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useDrawCycle } from "@/hooks/useDrawCycle";
-import { usePublicDrawData } from "@/hooks/usePublicDrawData";
-import { useVaultTvl } from "@/hooks/useVaultTvl";
-import { drawManagerAbi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
-import { addresses, contractsConfigured } from "@/lib/config";
-import {
-  DRAW_REVEAL_SLACK_BLOCKS,
-  DRAW_SETTLE_GAS,
-  estimateYieldPrize,
-} from "@/lib/draw";
-import { formatCountdown, formatUnits } from "@/lib/format";
-import { getFhevmInstance } from "@/lib/relayerSdk";
-import { isZeroHandle, readClearValue } from "@/lib/publicDecrypt";
-import { noticeFromWalletError, decodedRevertNotice } from "@/lib/walletError";
+import { drawManagerAbi } from "@/lib/abi/zealed";
+import { formatCountdown } from "@/lib/format";
+import { waitForOkTx } from "@/lib/waitForTx";
+import { noticeFromWalletError } from "@/lib/walletError";
 import {
   bannerClass,
   bannerOkClass,
@@ -28,302 +20,136 @@ import {
 
 type Status = { kind: "idle" | "ok" | "err" | "cancel"; text: string };
 
-function proofToHex(value: Uint8Array | string): Hex {
-  if (typeof value === "string") return (value.startsWith("0x") ? value : `0x${value}`) as Hex;
-  return bytesToHex(value);
-}
-
-async function resolveDrawGas(
-  client: PublicClient,
-  account: Address,
-  request: {
-    address: Address;
-    functionName: "commitDraw" | "revealDraw";
-    args: readonly unknown[];
-  },
-): Promise<bigint> {
-  try {
-    const estimated = await client.estimateContractGas({
-      address: request.address,
-      abi: drawManagerAbi,
-      functionName: request.functionName,
-      args: request.args as never,
-      account,
-    });
-    const padded = estimated + estimated / 4n;
-    if (padded > DRAW_SETTLE_GAS) return DRAW_SETTLE_GAS;
-    if (padded < 300_000n) return 300_000n;
-    return padded;
-  } catch {
-    return DRAW_SETTLE_GAS;
-  }
-}
-
-async function assertCanPayGas(client: PublicClient, account: Address, gas: bigint): Promise<void> {
-  const [balance, gasPrice] = await Promise.all([
-    client.getBalance({ address: account }),
-    client.getGasPrice(),
-  ]);
-  if (balance < gas * gasPrice) {
-    throw new Error("Not enough Sepolia ETH to cover gas.");
-  }
-}
-
-async function waitForOk(client: PublicClient, hash: Hex, replay?: () => Promise<unknown>): Promise<void> {
-  const receipt = await client.waitForTransactionReceipt({ hash });
-  if (receipt.status === "success") return;
-  if (replay) await replay();
-  throw new Error("The transaction reverted.");
-}
+const PHASE_COPY = {
+  loading: "Loading draw state…",
+  open: "Savings continue to accrue eligibility until this period closes.",
+  "ready-to-close": "The interval has ended. Anyone can close the draw.",
+  "awaiting-award":
+    "The snapshot is sealed and awaiting its public aggregate proof.",
+  claiming: "Awarded slots can be checked and claimed before the deadline.",
+  reconciliation:
+    "The claim window ended. Unused liquidity is being reconciled.",
+} as const;
 
 export function DrawClock({ align = "end" }: { align?: "start" | "end" }) {
-  const { phase, secondsRemaining, clockLabel } = useDrawCycle();
-  const configured = contractsConfigured();
-
-  if (!configured) return null;
-
+  const cycle = useDrawCycle();
+  const { selected } = useVaultDirectory();
+  if (!selected) return null;
   const value =
-    phase === "loading"
-      ? "…"
-      : phase === "missed"
-        ? "missed"
-        : formatCountdown(secondsRemaining);
-
+    cycle.phase === "open" || cycle.phase === "claiming"
+      ? formatCountdown(cycle.secondsRemaining)
+      : cycle.phase.replaceAll("-", " ");
   return (
     <div className={align === "end" ? "text-right" : "text-left"}>
-      <p className="m-0 font-mono text-[0.68rem] tracking-[0.14em] text-muted">{clockLabel}</p>
-      <p className={`m-0 mt-1 font-mono text-lg tabular-nums text-ink ${monoClass}`}>{value}</p>
+      <p className="m-0 font-mono text-[0.68rem] tracking-[0.14em] text-muted">
+        {cycle.clockLabel}
+      </p>
+      <p
+        className={`m-0 mt-1 font-mono text-lg tabular-nums capitalize text-ink ${monoClass}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
 
 export function DrawCyclePanel() {
-  const configured = contractsConfigured();
+  const { selected } = useVaultDirectory();
+  const configured = Boolean(selected);
   const { address } = useAccount();
-  const publicClient = usePublicClient();
+  const client = usePublicClient();
   const cycle = useDrawCycle();
-  const { prizeAmountPlain } = usePublicDrawData();
-  const { data: tvl } = useVaultTvl();
-  const { writeContractAsync } = useWriteContract();
-  const [busy, setBusy] = useState<string | null>(null);
+  const { writeContractAsync, data: txHash } = useWriteContract();
+  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
+  const draw = selected?.drawManager;
 
-  const draw = addresses.drawManager;
-  const tickets = addresses.ticketEngine;
-  const vault = addresses.vault;
-  const working = Boolean(busy);
-
-  const estimatedOpenPrize =
-    tvl !== undefined && cycle.phase === "open"
-      ? estimateYieldPrize(tvl, cycle.minInterval ?? 20n * 60n)
-      : 0n;
-
-  const caption =
-    cycle.phase === "interval"
-      ? prizeAmountPlain && prizeAmountPlain > 0n
-        ? `Last prize ${formatUnits(prizeAmountPlain)} cUSDC`
-        : "Waiting for the next interval"
-      : cycle.phase === "open"
-        ? estimatedOpenPrize > 0n
-          ? `About ${formatUnits(estimatedOpenPrize)} cUSDC yield to post`
-          : "Waiting on the keeper"
-        : cycle.phase === "awaiting-reveal"
-          ? "Reveal delay"
-          : cycle.phase === "settle"
-            ? "Waiting on the keeper"
-            : cycle.phase === "missed"
-              ? "Reveal window missed"
-              : "Loading";
-
-  const clockValue =
-    cycle.phase === "loading"
-      ? "…"
-      : cycle.phase === "missed"
-        ? "missed"
-        : formatCountdown(cycle.secondsRemaining);
-
-  async function withBusy(label: string, fn: () => Promise<void>) {
-    setBusy(label);
+  async function closeDraw() {
+    if (!draw || !client || !address) return;
+    setBusy(true);
     setStatus({ kind: "idle", text: "" });
     try {
-      await fn();
-    } catch (err) {
-      const notice = noticeFromWalletError(err, "Transaction failed");
-      setStatus({ kind: notice.kind, text: notice.text });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onStartDraw() {
-    if (!draw || !vault || !publicClient || !address) return;
-    await withBusy("Completing draw…", async () => {
-      const handle = (await publicClient.readContract({
-        address: vault,
-        abi: vaultAbi,
-        functionName: "totalDeposits",
-      })) as Hex;
-
-      if (isZeroHandle(handle)) {
-        throw new Error("Vault TVL is empty. Deposit before committing a draw.");
-      }
-
-      setBusy("Decrypting vault TVL…");
-      const instance = await getFhevmInstance();
-      const pub = await instance.publicDecrypt([handle]);
-      const tvlClear = readClearValue(pub.clearValues as Record<string, unknown>, handle);
-      if (tvlClear === undefined || tvlClear === 0n) {
-        throw new Error("Vault TVL is empty. Deposit before committing a draw.");
-      }
-      if (tvlClear > 0xffff_ffff_ffff_ffffn) {
-        throw new Error("TVL is too large to commit.");
-      }
-
-      const latest = await publicClient.getBlockNumber();
-      const target = latest + cycle.minRevealDelay + DRAW_REVEAL_SLACK_BLOCKS;
-      const proof = proofToHex(pub.decryptionProof as Uint8Array | string);
-      const args = [target, tvlClear, proof] as const;
-
-      setBusy("Completing draw…");
-      try {
-        await publicClient.simulateContract({
-          address: draw,
-          abi: drawManagerAbi,
-          functionName: "commitDraw",
-          args,
-          account: address,
-        });
-      } catch (err) {
-        if (decodedRevertNotice(err)) throw err;
-      }
-      const gas = await resolveDrawGas(publicClient, address, {
-        address: draw,
-        functionName: "commitDraw",
-        args,
-      });
-      await assertCanPayGas(publicClient, address, gas);
       const hash = await writeContractAsync({
         address: draw,
         abi: drawManagerAbi,
-        functionName: "commitDraw",
-        args,
-        gas,
+        functionName: "closeDraw",
       });
-      await waitForOk(publicClient, hash, async () => {
-        await publicClient.simulateContract({
-          address: draw,
-          abi: drawManagerAbi,
-          functionName: "commitDraw",
-          args,
-          account: address,
-        });
-      });
+      await waitForOkTx(client, hash);
       await cycle.refetch();
       setStatus({
         kind: "ok",
-        text: "Draw is in progress. Yield was pulled into the prize pot from your cUSDC.",
+        text: "Draw closed. The eligibility snapshot is sealed.",
       });
-    });
+    } catch (error) {
+      const notice = noticeFromWalletError(error, "Could not close the draw.");
+      setStatus({ kind: notice.kind, text: notice.text });
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function onSettleDraw() {
-    if (!draw || !tickets || !publicClient || !address) return;
-    await withBusy("Finalizing draw…", async () => {
-      const handle = (await publicClient.readContract({
-        address: tickets,
-        abi: ticketEngineAbi,
-        functionName: "totalTickets",
-      })) as Hex;
-
-      if (isZeroHandle(handle)) {
-        throw new Error("The pool has no tickets yet. Deposit before settling.");
-      }
-
-      setBusy("Decrypting ticket total…");
-      const instance = await getFhevmInstance();
-      const pub = await instance.publicDecrypt([handle]);
-      const total = readClearValue(pub.clearValues as Record<string, unknown>, handle);
-      if (total === undefined || total === 0n) {
-        throw new Error("The pool has no tickets yet. Deposit before settling.");
-      }
-      if (total > 0xffff_ffff_ffff_ffffn) {
-        throw new Error("Ticket total is too large to settle.");
-      }
-
-      setBusy("Finalizing draw…");
-      const proof = proofToHex(pub.decryptionProof as Uint8Array | string);
-      const args = [total, proof] as const;
-      try {
-        await publicClient.simulateContract({
-          address: draw,
-          abi: drawManagerAbi,
-          functionName: "revealDraw",
-          args,
-          account: address,
-        });
-      } catch (err) {
-        if (decodedRevertNotice(err)) throw err;
-      }
-      const gas = await resolveDrawGas(publicClient, address, {
-        address: draw,
-        functionName: "revealDraw",
-        args,
-      });
-      await assertCanPayGas(publicClient, address, gas);
-      const hash = await writeContractAsync({
-        address: draw,
-        abi: drawManagerAbi,
-        functionName: "revealDraw",
-        args,
-        gas,
-      });
-      await waitForOk(publicClient, hash, async () => {
-        await publicClient.simulateContract({
-          address: draw,
-          abi: drawManagerAbi,
-          functionName: "revealDraw",
-          args,
-          account: address,
-        });
-      });
-      await cycle.refetch();
-      setStatus({ kind: "ok", text: "Draw settled." });
-    });
+  if (!configured) {
+    return (
+      <div>
+        <p className="m-0 font-mono text-[0.68rem] tracking-[0.18em] text-ember/75">
+          DRAW LIFECYCLE
+        </p>
+        <p className={`${ledeClass} mt-2`}>
+          Multi-tier draw state is not configured yet.
+        </p>
+      </div>
+    );
   }
-
-  if (!configured) return null;
-
-  const canStart = cycle.phase === "open" && Boolean(address) && !working;
-  const canSettle = cycle.phase === "settle" && Boolean(address) && !working;
 
   return (
-    <div className="m-0 [&_p]:!mb-0">
-      <p className="m-0 font-mono text-[0.68rem] tracking-[0.18em] text-ember/75">NEXT DRAW</p>
-      <p className="m-0 mt-2 font-mono text-[2rem] font-medium tabular-nums tracking-tight text-ink">
-        {clockValue}
-      </p>
-      <p className={`${ledeClass} mt-2`}>{busy ?? caption}</p>
-      {cycle.phase === "open" || cycle.phase === "settle" ? (
-        <div className="mt-4">
-          <button
-            type="button"
-            className={btnSecondaryClass}
-            disabled={cycle.phase === "open" ? !canStart : !canSettle}
-            onClick={() => void (cycle.phase === "open" ? onStartDraw() : onSettleDraw())}
-          >
-            Complete draw
-          </button>
+    <div className="m-0">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="m-0 font-mono text-[0.68rem] tracking-[0.18em] text-ember/75">
+            DRAW LIFECYCLE
+          </p>
+          <p className="m-0 mt-2 font-dm-sans text-xl font-medium text-ink">
+            Draw #{cycle.drawId?.toString() ?? "…"}
+          </p>
+          <p className={`${ledeClass} mt-2 max-w-xl`}>
+            {PHASE_COPY[cycle.phase]}
+          </p>
         </div>
+        <DrawClock />
+      </div>
+
+      {cycle.phase === "ready-to-close" ? (
+        <button
+          type="button"
+          className={`${btnSecondaryClass} mt-4`}
+          disabled={!address || busy}
+          onClick={() => void closeDraw()}
+        >
+          {busy ? "Closing draw…" : "Close draw"}
+        </button>
       ) : null}
-      {status.kind !== "idle" && (
+      {cycle.phase === "awaiting-award" ? (
+        <p className={bannerClass}>
+          Awarding requires the aggregate score proof; no user position is
+          decrypted.
+        </p>
+      ) : null}
+      {status.kind !== "idle" ? (
         <p
           className={
-            status.kind === "ok" ? bannerOkClass : status.kind === "cancel" ? bannerClass : bannerWarnClass
+            status.kind === "ok"
+              ? bannerOkClass
+              : status.kind === "cancel"
+                ? bannerClass
+                : bannerWarnClass
           }
         >
           {status.text}
         </p>
-      )}
+      ) : null}
+      <div className="mt-3">
+        <ExplorerTxLink hash={txHash} />
+      </div>
     </div>
   );
 }

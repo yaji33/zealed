@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useAccount } from "wagmi";
+import { VaultSelector } from "@/components/VaultSelector";
 import { WalletGate } from "@/components/WalletGate";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
 import { cardClass } from "@/lib/uiClasses";
@@ -18,7 +19,10 @@ function AppPanel({ message }: { message: string }) {
 }
 
 const CusdcFaucetCard = dynamic(
-  () => import("@/components/CusdcFaucetCard").then((m) => ({ default: m.CusdcFaucetCard })),
+  () =>
+    import("@/components/CusdcFaucetCard").then((m) => ({
+      default: m.CusdcFaucetCard,
+    })),
   {
     ssr: false,
     loading: () => <AppPanel message="Loading faucet…" />,
@@ -37,5 +41,10 @@ export function FaucetApp() {
     return <WalletGate />;
   }
 
-  return <CusdcFaucetCard />;
+  return (
+    <div className="flex flex-col gap-6">
+      <VaultSelector />
+      <CusdcFaucetCard />
+    </div>
+  );
 }

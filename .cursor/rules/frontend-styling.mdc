@@ -1,14 +1,44 @@
 ---
-description: "apps/web styling — Tailwind utilities in JSX; globals.css is tokens and resets only"
+description: "Zealed web styling, privacy labels, and target-status rules"
 globs: apps/web/**/*
 alwaysApply: false
 ---
 
-# Frontend styling (`apps/web`)
+# Frontend rules
 
-- **Tailwind v4 utilities in JSX** are the standard for all UI. Design tokens live in `apps/web/tailwind.config.ts` (`void`, `base`, `surface`, `edge`, `ink`, `ember`, `mint`, `muted`, `line`, plus dashboard semantics).
-- **`globals.css`** is tokens and resets only: `@import "tailwindcss"`, `@config`, fonts, base-layer `html`/`body`/`a`/`code`. No bespoke component classes (`.landing-*`, `.panel`, `.btn`, etc.).
-- Repeated long dashboard class strings may use `src/lib/uiClasses.ts`. Do not add new named classes to `globals.css` — use arbitrary values in JSX instead.
-- Dot-matrix / ASCII components (`AsciiPoolField`): logic in TS; outer layout only via Tailwind.
+## Styling
 
-Full convention: `.claude/skills/zealed-fhevm/SKILL.md` Section 7.
+- Use Tailwind v4 utilities in JSX.
+- Use tokens from `apps/web/tailwind.config.ts`; avoid ad hoc colors when a semantic token exists.
+- Keep `globals.css` to framework imports, tokens, fonts, and base resets.
+- Do not add bespoke component classes as a substitute for utilities.
+- Repeated utility strings may live in `src/lib/uiClasses.ts`.
+- Keep dot-matrix and ASCII rendering logic in TypeScript; style outer layout with utilities.
+
+## Accounting labels
+
+Use the canonical product terms exactly:
+
+- Principal TVL
+- Available prize liquidity
+- Reserve
+- Tier allocation
+- Rollover
+
+Do not combine principal and prize buckets into “pool size.” Do not call sponsor-funded mock yield accrued vault yield.
+
+## Privacy and state
+
+- Clearly separate public aggregate data from wallet-scoped encrypted data.
+- Never render or log plaintext user amounts outside the authorized user’s local decrypted view.
+- Never send user values to an application backend for decryption.
+- Losing a draw check is a successful encrypted-zero result, not an error state inferred from transaction failure.
+- Map wallet failures to concise user-facing notices; do not render raw calldata, proofs, stack traces, or provider dumps.
+
+## Implementation status
+
+- Label unavailable target features honestly.
+- Do not display a contract address as current unless it matches the implemented architecture and a verified deployment record.
+- Do not let placeholder data look live.
+
+Full product context: `build-brief.md` and `docs/architecture.md`.

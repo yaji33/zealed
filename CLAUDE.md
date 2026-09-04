@@ -1,33 +1,61 @@
-# CLAUDE.md — Agent Steering File
+# CLAUDE.md
 
-This file is read by Claude Code and should be treated as authoritative by Cursor as well. It defines constraints, not just preferences. See `docs/architecture.md` and `build-brief.md` for full design context — do not re-derive architecture decisions, reference them.
+Repository steering for Zealed. `build-brief.md` is the canonical product specification; `docs/architecture.md` defines the target system design. Do not infer that target features or addresses are implemented until source, tests, and deployment records establish that status.
 
-## What this project is
+## Before implementation
 
-Confidential prize savings protocol (fhEVM), built for the Zama Season 4 bounty. Deadline Sep 5, 2026. Solo developer, pnpm monorepo, Hardhat contracts + Next.js frontend.
+1. Read `build-brief.md`, especially Section 10.
+2. Map the task to Section 2 or Section 9.
+3. For contract work, load `.claude/skills/zealed-fhevm/SKILL.md` and verify APIs against current official Zama documentation.
+4. Preserve the accounting and privacy boundaries below.
 
-## Non-negotiable constraints
+## Non-negotiable product constraints
 
-1. **Never loop over all users to compute a draw winner on-chain.** Winner selection is pull-based: each user calls `checkIfWon()` for themselves, one encrypted comparison, O(1) protocol-side cost. If you find yourself writing a `for` loop over depositors inside `DrawManager.sol`, stop — that's the wrong pattern, re-read `build-brief.md` Section 5.
-2. **Never emit plaintext amounts in events or logs.** Deposit/withdraw/prize events signal that an action occurred, never the value. This applies to test fixtures and console.log debugging too — don't leave decrypted values in committed code.
-3. **Principal withdrawal has no lockup, ever.** This is a hard bounty requirement, not a design choice up for revisiting mid-build.
-4. **Randomness (`r`) is the only thing allowed to be plaintext in the draw flow.** Everything it's compared against (individual ticket ranges) stays encrypted.
-5. **Use Zama's existing cUSDC / Wrappers Registry token, do not build a custom confidential ERC-20.** Reinventing this wastes the timeline and adds unaudited surface area.
-6. **Decryption only happens client-side via the user-decrypt / EIP-712 permit flow.** No server-side decryption path, no admin decrypt function on any user's individual balance or prize, under any circumstance — including for debugging. If you need to debug a value, decrypt it in a local test with the test wallet's own key, never add a decrypt-any-user function to a deployed contract.
+1. ERC-7984 principal is withdrawable at all times. Draws, snapshots, claims, and maintenance cannot block withdrawal.
+2. Principal and prizes are separate within every registered vault system. Its `ConfidentialVault`
+   holds saver principal; its `PrizePool` holds sponsor-funded mock yield.
+3. Never transfer, reserve, allocate, or pay vault principal as a prize.
+4. Winner checking is pull-based and scoped to one user and one bounded prize slot.
+5. Never loop over depositors. Fenwick work is bounded by configured depth; slot work is bounded by explicit limits.
+6. Closed draws use immutable versioned cumulative-balance snapshots while a new version accepts balance changes.
+7. Each prize slot stores encrypted randomness generated with `FHE.randEuint64()` in a transaction.
+8. A losing check yields encrypted zero and does not revert or emit a public outcome signal.
+9. User values are decrypted client-side through EIP-712-authorized user decryption only.
+10. No server, owner, keeper, or administrator may decrypt another user’s state.
+11. Never emit or log plaintext user amounts, including in tests and debug code.
+12. `VaultRegistry` is curated and non-custodial. Never reuse an asset or component across registry
+    entries or mix balances, snapshots, draws, or prize accounting across vault IDs.
 
-## Workflow expectations
+## Accounting language
 
-- Work in small, reviewable commits scoped to one contract or one frontend flow at a time. Don't batch vault + draw manager + frontend into one commit.
-- Every contract change needs a corresponding test before it's considered done, not after. Particularly for `checkIfWon()` — this is the least conventional part of the system and the most likely place for an off-by-one or range-boundary bug.
-- Before implementing a new feature, check Section 10 of `build-brief.md` ("Explicitly Out of Scope"). If it's on that list, don't build it, flag it back instead. Scope creep is the main risk against the Sep 5 deadline, not technical difficulty.
-- When stuck on an fhEVM-specific pattern (encrypted comparisons, input proofs, decryption oracle calls), check Zama's official docs/examples first rather than guessing at an API shape — the FHE type system doesn't behave like normal Solidity and wrong guesses compile but fail silently or revert unhelpfully.
+Use these exact concepts:
 
-## Definition of done for any given task
+- **Principal TVL**: saver principal held by the selected vault's `ConfidentialVault`.
+- **Available prize liquidity**: uncommitted sponsor-funded assets in its `PrizePool`.
+- **Reserve**: prize liquidity held back as a backstop.
+- **Tier allocation**: a draw-specific budget for a tier.
+- **Rollover**: unused tier liquidity returned to future availability.
 
-A task is done when: it has a test, it doesn't violate any constraint above, and it maps to a specific checklist item in `build-brief.md` Section 2 or is explicitly part of the "ship-if-time" tier in Section 9. If a task doesn't map to either, ask before building it.
+Do not call a sum of principal and prize buckets “pool size.” Do not describe sponsor funding as accrued vault yield.
+
+## Public and encrypted state
+
+Encrypted by default: user amounts, balances, cumulative balances, weights, ranges, slot randomness, eligibility, outcomes, and prizes.
+
+Public by design: draw lifecycle, snapshot version, tier definitions, bounded slot counts, and aggregate prize accounting. Principal TVL is public only when deliberately authorized for aggregate public decryption.
+
+## Engineering workflow
+
+- Keep changes scoped and reviewable.
+- Add or update tests with every contract behavior change.
+- Verify snapshot immutability, accounting conservation, ACL isolation, range boundaries, and bounded work.
+- Do not preserve a legacy pattern merely because it exists in the current implementation when it contradicts the canonical brief.
+- Do not claim a target feature is available before implementation.
+- Do not publish deployment addresses without matching implementation and verified deployment records.
 
 ## Style
 
-- TypeScript strict mode, no `any` without a comment explaining why
-- Solidity: NatSpec on every external/public function, especially anything touching encrypted state, since a reviewer (possibly OpenZeppelin, if this submission is selected) will be reading intent from comments as much as code
-- No decorative complexity — this is a bounty judged on production-readiness, not on how much surface area was built
+- TypeScript strict mode; no `any` without a reason comment.
+- NatSpec on every external or public Solidity function.
+- Prefer explicit invariants and bounded constants over decorative abstraction.
+- Use official Zama documentation as the primary source for fhEVM APIs.

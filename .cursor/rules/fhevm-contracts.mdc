@@ -1,40 +1,75 @@
 ---
-description: "fhEVM-specific rules for Zealed's smart contracts: encrypted types, ACL, and the pull-based draw pattern"
+description: "fhEVM rules for Zealed contracts, snapshots, prize accounting, and private draws"
 globs: packages/contracts/**/*.sol,packages/contracts/**/*.ts
 alwaysApply: false
 ---
 
-# Zealed — fhEVM Contract Rules
+# Zealed fhEVM contract rules
 
-Applies to Solidity contracts and their tests. Full reference: `.claude/skills/zealed-fhevm/SKILL.md` and `references/prior-art.md` in that same folder — this rule is the condensed version scoped for Cursor's context window.
+Read `build-brief.md`, `docs/architecture.md`, and `.claude/skills/zealed-fhevm/SKILL.md`. Verify API shapes against the installed package versions and current official Zama documentation.
 
-## Version currency — check first
+## Ciphertexts and ACL
 
-FHEVM v0.9 moved decryption from an Oracle/gateway-callback model to a self-relaying model (client-side decrypt via `@zama-fhe/relayer-sdk` + `FHE.verifySignatures()`, no `onlyGateway` callback). Check the installed `@fhevm/solidity` version against `docs.zama.org/protocol/solidity-guides/development-guide/migration` before writing any decryption flow — some public examples still show the older callback pattern.
+- Default to `euint64` for amounts and weights unless a documented range analysis requires otherwise.
+- Validate that the sender is authorized for ciphertext handles.
+- Convert external encrypted inputs before storing them; never store `externalEuintXX`.
+- Do not reuse encrypted input proofs.
+- Every FHE operation creates a new ciphertext handle; grant the contract and intended reader the required permissions on the new handle.
+- User-decryptable values require persistent permission for both the contract and user.
+- Use transient grants only for narrow same-transaction cross-contract access.
+- Never branch on `ebool`; use `FHE.select`.
 
-## Non-negotiables
+## Principal
 
-- Default to `euint64` for every amount (balances, TWAB, ticket weights, prizes). Only widen with a documented reason.
-- Every `FHE.fromExternal(input, proof)` call is immediately followed by `FHE.allowThis(...)`, plus `FHE.allow(..., user)` for anyone who needs to read the result later.
-- Every FHE operation produces a new handle with no ACL — re-grant `allowThis`/`allow` after each one, not just once at the end of a function.
-- Never `if`/`else` branch on an `ebool`. Use `FHE.select(condition, ifTrue, ifFalse)`.
-- Never store an `externalEuintXX` type — convert with `FHE.fromExternal` first.
-- Never reuse an `inputProof` across transactions.
+- Each registered `ConfidentialVault` is the sole principal custodian for its immutable ERC-7984 asset.
+- `VaultRegistry` is curated and non-custodial; reject duplicate assets/components and cross-wired bundles.
+- Withdrawal is independent from every draw lifecycle state.
+- An encrypted overdraw resolves to a zero-value confidential transfer and unchanged liability, not a revert that reveals the comparison.
+- No prize contract can debit principal or obtain an approval path that enables it.
 
-## The Zealed-specific pattern: pull-based draw check
+## Versioned ticket snapshots
 
-`DrawManager.checkIfWon()` is called per-user, does exactly one encrypted range comparison against the public random draw value `r`, and stores an ACL-gated encrypted prize result for that caller only. Ticket ranges come from `TicketEngine`'s Fenwick tree: permanent per-user index slots, O(log n) `update` on sync, cumulative start via on-demand `prefixSumBefore` — never a stored contiguous start that shifts other users. Fenwick walks must be bounded by `MAX_DEPOSITORS` (not `uint256` overflow) or the tx hits `HCUTransactionLimitExceeded`. If a generated function loops over a mapping of all depositors to find a winner, that's wrong — stop and re-read `SKILL.md` Section 3.
+- Use encrypted cumulative-balance checkpoints and versioned Fenwick state.
+- A closed draw binds to an immutable version; deposits and withdrawals continue in a new active version.
+- Do not copy or scan all users at draw close.
+- User indexes are stable and never reused to reinterpret history.
+- Fenwick update and prefix walks are bounded by an explicit maximum depth.
+- Never store contiguous starts that force later users to be updated.
 
-Losing must resolve to an encrypted zero, never a revert — a revert-on-loss path leaks win/loss through transaction success alone, which defeats the privacy goal even with no balance exposed.
+## PrizePool
 
-Optional `revealWin()` proves win/loss via a publicly decryptable `ebool` + `checkSignatures` and emits tier only — never the prize amount. Off by default; losers cannot pass verification.
+- Accept explicit sponsor funding as mock yield.
+- Track available prize liquidity, reserve, tier allocations, claim obligations, paid assets, and rollover without double counting.
+- Tier and total slot counts are explicitly bounded.
+- Allocation and rollover rules are deterministic and tested.
+- Aggregate prize accounting can be public; user prize amounts stay encrypted.
 
-**Prize pot:** `commitDraw` verifies public vault TVL, sets `prize = tvl × elapsed / YIELD_DIVISOR`, and pulls that cUSDC from the committer into DrawManager. `claim(drawId)` pays winners from the pot (encrypted zero for losers). Do not skim vault principal.
+## DrawManager
 
-**This generalizes beyond the draw.** Any function where success/failure depends on an encrypted comparison (withdraw amount vs. balance, draw eligibility, anything else added later) resolves to a zero-value no-op on the failing branch via `FHE.select`, never a `require`/revert. Confirmed in `ConfidentialVault.withdraw()`: an oversized withdrawal silently transfers zero and leaves the balance unchanged rather than reverting. Treat this as the default for every new function that branches on encrypted state, not a special case for the draw.
+- Generate each slot’s random value with `FHE.randEuint64()` in a state-changing transaction.
+- Store and bind each random ciphertext to exactly one draw and slot.
+- Do not make slot randomness publicly decryptable.
+- Document and test how 64-bit randomness maps to the sealed ticket domain, including bias and zero-domain handling.
+- Scope checks to one `(draw, tier, slot, account)` and enforce replay protection.
+- Compute only the caller’s encrypted prefix range.
+- Select the encrypted prize on a win and encrypted zero on a loss.
+- Never enumerate depositors. Any bounded slot loop must have a small explicit maximum and a cost test.
 
-**Deposit/withdraw integration note:** the caller must call `setOperator(vaultAddress, ...)` on the underlying confidential asset before the vault can pull funds — the vault verifies the encrypted input, then pulls via the `euint64` `confidentialTransferFrom` overload. The Week 3 frontend deposit flow needs this operator-approval step before the first `deposit()` call, same shape as an ERC-20 `approve()` before `transferFrom()`. After deposit/withdraw the vault pushes TWAB to TicketEngine via `syncWeightFromVault`; that call **no-ops while frozen** so withdraw never fails during an active draw.
+## Events and decryption
 
-## Testing
+- Never emit or log plaintext user amounts, weights, outcomes, prizes, or slot randomness.
+- Event names and identifiers may report that an action occurred without revealing sensitive values.
+- User values are decrypted off-chain through the EIP-712 user-decrypt flow.
+- Do not add backend, owner, keeper, or administrator decryption.
 
-Hardhat mock FHE mode for all unit tests. Any test touching `checkIfWon` should include a gas-regression check confirming cost doesn't scale with total depositor count — that's the property the whole architecture depends on.
+## Required test properties
+
+- withdrawal succeeds in every draw state;
+- principal cannot fund a prize;
+- prize buckets conserve sponsor-funded assets;
+- sealed versions are immutable;
+- Fenwick costs do not become linear in depositor count;
+- random slots cannot be replaced;
+- half-open range boundaries are correct;
+- loss returns encrypted zero without reverting;
+- ACLs isolate users and contracts correctly.

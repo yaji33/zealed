@@ -1,185 +1,98 @@
 # Zealed
 
-Confidential prize savings, built on the Zama Protocol. Submission for Zama Developer Program Mainnet Season 4 — Bounty Track.
+Zealed is a curated multi-vault confidential prize-savings protocol on Zama fhEVM. Savers choose an
+ERC-7984 asset vault, hold private positions, withdraw principal at any time, and privately check
+eligibility for prizes funded separately from that vault's principal.
 
-## Live demo (Sepolia)
+The curated multi-vault, multi-tier architecture is deployed and verified on Sepolia. The live registry
+contains independent cUSDCMock and cUSDTMock systems; deployment records and operating commands are
+documented in `docs/deployment.md`.
 
-- **App:** [https://considers-bottles-kodak-bargain.trycloudflare.com](https://considers-bottles-kodak-bargain.trycloudflare.com) (Cloudflare quick tunnel over the production Next.js build — ephemeral; for a durable URL run `npx vercel --prod` from `apps/web` after `vercel login`)
-- **Network:** Ethereum Sepolia (`11155111`)
-- **Deposit asset:** [cUSDCMock](https://sepolia.etherscan.io/address/0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639) (`0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639`) — Zama Wrappers Registry confidential USDC mock
-- **Underlying mock USDC:** [ERC20 mock](https://sepolia.etherscan.io/address/0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF) (`0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF`) — public `mint`, then wrap into cUSDCMock
+## Target architecture
 
-### Getting test cUSDC (faucet)
+- **VaultRegistry** discovers curated, fully wired asset-specific vault systems without holding funds.
+- **ConfidentialVault** holds ERC-7984 principal and keeps withdrawal independent from draws.
+- **TicketEngine** records encrypted cumulative balances in versioned Fenwick snapshots.
+- **PrizePool** isolates sponsor-funded mock yield and accounts for available liquidity, reserve, tier allocations, claims, and rollover.
+- **DrawManager** stores encrypted `FHE.randEuint64()` values for a bounded set of prize slots.
+- **Users** check one draw slot at a time. The contract compares only that user’s encrypted range and returns an encrypted prize or encrypted zero.
+- **The web client** encrypts inputs and performs EIP-712-authorized user decryption locally.
 
-Judges and new wallets need cUSDC before they can deposit. Do this on Sepolia (the in-app faucet at `/dashboard/faucet` runs the same steps):
+Winner checks never loop over depositors.
 
-1. **Mint** mock USDC on the underlying token `0x9b5Cd13b8eFbB58Dc25A05CF411D8056058aDFfF` via public `mint(to, amount)`.
-2. **Approve** that token for the cUSDCMock wrapper `0x7c5BF43B851c1dff1a4feE8dB225b87f2C223639` via ERC-20 `approve(wrapper, amount)`.
-3. **Wrap** into confidential cUSDC by calling `wrap(to, amount)` on the wrapper (amount is underlying units; the wrapper’s `rate()` scales mint size the same way as `packages/contracts/scripts/smoke-sepolia.ts`).
+Each registry entry binds one asset, vault, ticket engine, prize pool, and draw manager. Assets and
+components cannot be reused across entries, preventing cross-vault custody or accounting mistakes.
 
-After wrap, use the dashboard: **Approve the vault** (`setOperator` on cUSDCMock) → **Deposit**.
+## Accounting at a glance
 
-### Verified contracts
+- **Principal TVL** belongs to savers and remains withdrawable.
+- **Available prize liquidity** is uncommitted sponsor-funded mock yield.
+- **Reserve** is prize liquidity held back as a backstop.
+- **Tier allocations** are draw-specific prize budgets.
+- **Rollover** returns unused tier liquidity to future draws.
 
-| Contract | Address | Explorer |
-|---|---|---|
-| ConfidentialVault | `0x40715771C7ADC9bdB9359A19531c1c006691EB0F` | [Etherscan](https://sepolia.etherscan.io/address/0x40715771C7ADC9bdB9359A19531c1c006691EB0F#code) |
-| TicketEngine | `0xf1d3cb98993FBb9b6E5fa442Ac34A0b85727aE3F` | [Etherscan](https://sepolia.etherscan.io/address/0xf1d3cb98993FBb9b6E5fa442Ac34A0b85727aE3F#code) |
-| DrawManager | `0xd676418feeDF5E8a8448e24f67Bf7E0Fa86F32bc` | [Etherscan](https://sepolia.etherscan.io/address/0xd676418feeDF5E8a8448e24f67Bf7E0Fa86F32bc#code) |
+These figures must remain separate in contract accounting and UI labels. Prize funding must never reduce principal TVL.
 
-Deploy script (full trio: vault + TicketEngine + DrawManager, then wires `setTicketEngine` + `setDrawManager`): `packages/contracts/scripts/deploy-sepolia.ts`. Addresses also in `packages/contracts/deployments/sepolia.json` and `apps/web/.env.example`.
+## Privacy boundary
 
-**Redeploy note (Aug 29, 2026):** Fresh trio for yield-at-commit `DrawManager` (constructor takes vault; prize pot + `claim`). Prior vault balances and ticket indexes do not carry over. Copy the addresses from `.env.example` into `.env.local`, then restart `pnpm dev`. Keeper needs `setOperator(DrawManager)` on cUSDC and enough balance to fund each cycle's prize.
+Encrypted:
 
-### Draw keeper flow (permissionless)
+- user deposit and withdrawal amounts;
+- user balances, cumulative balances, ticket weights, and ranges;
+- per-slot random values;
+- individual outcomes and prize amounts;
+- confidential asset transfers.
 
-Both `commitDraw` and `revealDraw` are **permissionless** (no admin key). Production PoolTogether adopters run a **keeper** so savers never send those txs.
+Public:
 
-**Demo keeper** (Hardhat signer / deployer key, polls every 15s):
+- draw timing and lifecycle;
+- snapshot versions;
+- tier definitions and bounded slot counts;
+- aggregate sponsor funding, prize liquidity, reserve, allocations, rollover, and paid totals;
+- principal TVL only when intentionally published as an aggregate.
+
+Plaintext user amounts are prohibited in events, application logs, test logs, and console output.
+
+## Repository
+
+```text
+apps/web/                  Next.js client
+packages/contracts/        Hardhat and fhEVM contracts
+docs/architecture.md       Target system design
+docs/economics.md          Prize liquidity and rollover accounting
+docs/privacy.md            Confidentiality and observable leakage
+docs/operations.md         Permissionless draw lifecycle
+docs/deployment.md         Sepolia deployment and legacy withdrawal
+build-brief.md             Canonical product requirements
+CLAUDE.md                  Repository-wide engineering constraints
+.cursor/rules/             Scoped Cursor rules
+.claude/skills/            Project-specific fhEVM guidance
+```
+
+## Local development
+
+Requirements: Node.js, pnpm, and the environment values described by each package.
 
 ```bash
-pnpm keeper
-```
-
-(`packages/contracts` → `hardhat run scripts/keeper-sepolia.ts --network sepolia`). It public-decrypts vault TVL, posts demo-scaled yield (`prize = tvl × elapsed / YIELD_DIVISOR`, ~1% of TVL per 20 minutes), pulls that cUSDC into the DrawManager pot, and reveals after the reveal block. The keeper must `setOperator(DrawManager)` on cUSDC and hold enough balance to fund the pot. It does not call `checkIfWon`. The Claim **Complete draw** button stays as a fallback if the keeper is down.
-
-The landing pool and the vault chart show the public countdown. Manual one-shot smoke:
-
-`packages/contracts/scripts/smoke-draw-sepolia.ts` (or `RUN_DRAW=1` on `smoke-sepolia.ts`).
-
-1. **`commitDraw(revealBlock, tvlCleartext, tvlProof)`** — verifies public TVL, computes yield prize, pulls that amount from the committer into the pot, freezes TicketEngine weights, bumps `drawId`, and picks a future `revealBlock`. Requires `revealBlock >= block.number + MIN_REVEAL_DELAY` (**5 blocks**, ~1 minute on Sepolia) and at least **`MIN_DRAW_INTERVAL` (20 minutes)** since the previous commit. Both values are demo-scaled; production would use a longer cadence (e.g. daily) and a wider commit-to-reveal gap. Sepolia cUSDC has no Aave yield — the keeper sponsors the pot; the formula is the yield function.
-2. Wait until the reveal block is mined (and within the 256-block `blockhash` window).
-3. **`revealDraw(totalTickets, decryptionProof)`** — public-decrypts total tickets, sets plaintext `r`, marks the draw settled. Weights stay frozen so `checkIfWon` cannot be gamed by post-reveal deposits that inflate a live Fenwick range against an already-finalized `r`.
-4. Users call **`checkIfWon`**, user-decrypt their pending prize, then **`claim(drawId)`** to pull cUSDC from the pot (encrypted zero transfer if they lost).
-5. **`unfreezeWeights()`** (also permissionless) reopens ticket syncs, or the next `commitDraw` unfreezes-then-refreezes.
-
-Information leakage by design: `r`, prize size, and total tickets are public after reveal. Individual balances, weights, and win amounts stay encrypted unless the user decrypts or opts into `revealWin` (tier only).
-
-### Sepolia smoke results
-
-Against the prior Sepolia deployment (Relayer SDK self-relay, not Hardhat mock FHE):
-
-- `setOperator` → encrypt → `deposit` → user-decrypt balance → `withdraw` → public TVL decrypt: **passed**
-- commit → wait blocks → `publicDecrypt(totalTickets)` → `revealDraw` → `checkIfWon` → user-decrypt prize: **passed** (prize `1000`)
-
-Re-run smoke against the addresses above after redeploy before treating those results as current.
-
-Observed vs mock/local (flag for judges / future you):
-
-- **Gas:** deposit ~1.6–1.7M, withdraw ~1.7M, `checkIfWon` ~444k on this draw (Fenwick depth for one depositor). Mock tests do not reflect these costs.
-- **Relayer latency:** `createInstance` ~10–36s, `encrypt` ~18–22s, `userDecrypt` ~4–5s, `publicDecrypt` ~3–4s. Public RPCs can `ConnectTimeout` during encrypt — use a stable Sepolia RPC (Infura) for scripts / wallet RPC.
-- **Hardhat FHE plugin:** not initialized on `--network sepolia`; do **not** rely on `hre.fhevm` for live smokes. Use `@zama-fhe/relayer-sdk` and pass explicit `gasLimit` on FHE txs so Hardhat does not `eth_estimateGas` through the uninitialized plugin.
-- **Decryption pattern (SKILL §0):** live path is self-relay (`makePubliclyDecryptable` + `publicDecrypt` / `checkSignatures` for aggregates & `revealWin`; EIP-712 `userDecrypt` for balances/prizes). No gateway callback.
-- **cUSDC:** on Sepolia use the registry **cUSDCMock** (mint underlying → `approve` → `wrap`), not a local `MockERC7984`.
-
-## Description
-
-Zealed is a confidential version of a no-loss prize savings protocol (the PoolTogether model): users deposit into a shared pool, the yield the pool generates is distributed through periodic prize draws, and principal stays withdrawable at any time. Deposits, balances, and individual winnings are encrypted end-to-end using fully homomorphic encryption (FHE) via the Zama Protocol. Winner selection is provably fair and publicly verifiable, without exposing any individual's position.
-
-## Value Proposition
-
-Today's on-chain prize savings apps are public by default: exact deposit sizes, exact odds, and every draw's winners are visible to anyone watching the chain. That transparency has a cost — it discourages exactly the users (privacy-conscious individuals, companies, DAOs, families) who'd otherwise use the product, because participating means broadcasting your savings behavior on a public ledger.
-
-Zealed keeps the fairness guarantee — the draw is still verifiable, the math still checks out — while making individual positions private by default. Nobody, including other depositors, block explorer users, or the protocol's own observers, can see an individual's deposit size, balance, or draw outcome unless that person chooses to reveal it. Confidentiality here isn't a compliance checkbox, it's the feature that makes the product usable by the segment the public version structurally excludes.
-
-## Architecture
-
-```mermaid
-flowchart TB
-    subgraph Client["Frontend (Next.js)"]
-        UI_Public["Public view<br/>TVL, yield, draw history"]
-        UI_Private["Private dashboard<br/>wallet-gated"]
-        SDK["Zama Relayer SDK<br/>encrypt inputs / user-decrypt"]
-    end
-
-    subgraph Chain["Sepolia — fhEVM"]
-        Vault["ConfidentialVault.sol<br/>encrypted balance + TWAB<br/>deposit / withdraw, no lockup"]
-        Ticket["TicketEngine.sol<br/>encrypted ticket weight<br/>per-user cumulative range"]
-        Draw["DrawManager.sol<br/>commit-reveal randomness<br/>pull-based checkIfWon()"]
-        Asset["cUSDC (ERC-7984)<br/>confidential deposit asset"]
-    end
-
-    UI_Public -.reads aggregate.-> Vault
-    UI_Private <-->|encrypt / decrypt| SDK
-    SDK <--> Vault
-    SDK <--> Draw
-    Vault <--> Asset
-    Vault --> Ticket
-    Ticket --> Draw
-```
-
-### Draw flow — the pull-based design
-
-Winner selection does not loop over depositors on-chain. A public random value is finalized via commit-reveal, then each user checks their own eligibility on demand — this keeps draw settlement O(1) regardless of pool size, and is the core architectural decision behind this build (see `build-brief.md` Section 5 and `SKILL.md` Section 3 for the full rationale).
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant Vault as ConfidentialVault
-    participant Draw as DrawManager
-    participant Relayer as Zama Relayer
-
-    Note over Draw: Draw period closes
-    Draw->>Draw: Commit to future block
-    Draw->>Draw: Reveal → finalize public r
-
-    User->>Draw: checkIfWon()
-    Draw->>Draw: one encrypted range comparison<br/>(r vs. this user's ticket range only)
-    Draw-->>User: encrypted prize (0 if not won)
-
-    User->>Relayer: user-decrypt request (EIP-712 permit)
-    Relayer-->>User: decrypted prize amount, client-side only
-
-    Note over User,Vault: Principal withdrawal is independent<br/>of the draw cycle, available anytime
-```
-
-## Passed Tests
-
-This section is a snapshot, not a guarantee — update it as new modules land. Current as of Week 1 (`ConfidentialVault` complete):
-
-| Suite | Test | Status |
-|---|---|---|
-| ConfidentialVault | reverts when constructed with the zero asset address | ✅ |
-| ConfidentialVault | deposits encrypted amount and updates balance + TWAB without emitting plaintext amounts | ✅ |
-| ConfidentialVault | withdraws principal at any time with no lockup | ✅ |
-| ConfidentialVault | transfers zero and keeps balance when withdraw exceeds encrypted balance | ✅ |
-| ConfidentialVault | accrues TWAB over time as a time-weighted average of balance | ✅ |
-| ConfidentialVault | isolates balances across depositors | ✅ |
-| ConfidentialVault | tracks publicly decryptable TVL; oversized withdraw leaves total unchanged | ✅ |
-| TicketEngine | Fenwick indices, weight sync, freeze semantics | ✅ |
-| DrawManager | checkIfWon O(log n), lose=encrypted zero, commit-reveal | ✅ |
-| DrawManager | revealWin tier-only selective disclosure | ✅ |
-| Frontend flows | public + private dashboard (TVL + revealWin toggle) | ✅ |
-
-Run locally:
-
-```bash
+pnpm install
 pnpm --filter @zealed/contracts test
+pnpm --filter @zealed/web dev
 ```
 
-## Tech Stack
+See `packages/contracts/README.md` and `apps/web/README.md` for package-specific guidance.
 
-- **Contracts:** Solidity, fhEVM (`@fhevm/solidity` 0.11.1), Hardhat, deployed to Sepolia
-- **Confidential asset:** cUSDC (ERC-7984) via OpenZeppelin confidential contracts; `MockERC7984` for local testing
-- **Frontend:** Next.js 15, TypeScript, wagmi/viem, Zama Relayer SDK (encrypt / user-decrypt via EIP-712 permit)
-- **Randomness:** commit-reveal against a future block hash — the drawn value is public, only individual positions stay encrypted
-- **Monorepo:** pnpm + Turborepo
-- **Agent tooling:** project-specific skill and rule files for Claude Code (`.claude/skills/zealed-fhevm/`) and Cursor (`.cursor/rules/`), kept in sync with this repo's actual shipped code — see `SKILL.md` Section 8 for build history
+## Status discipline
 
-## Roadmap
+- Target behavior belongs in the brief and architecture document.
+- Implemented behavior must be supported by source and tests.
+- Deployed behavior must also have a matching verified deployment record.
+- Historical addresses are not canonical and are intentionally omitted here.
 
-**In scope for the Season 4 bounty submission (by Sep 5, 2026):**
-- Confidential deposit/withdraw vault — shipped
-- TicketEngine + pull-based draw settlement — shipped
-- Prize claim with client-side decryption + on-chain `claim()` payout from the DrawManager pot
-- Public aggregate view + private wallet-gated dashboard — shipped (`apps/web`)
-- Optional post-win selective disclosure (`revealWin()`) — shipped (tier only, off by default)
+## Primary references
 
-**Path to production, if selected for further development:**
-- Professional smart contract audit (Zama has indicated OpenZeppelin audit support for the strongest submission)
-- Shadow Circles — private group/family/DAO pooled vaults with internal privacy between members
-- Anti-whale progressive ticket weighting, toggleable
-- Compliance/auditor selective-reveal mode for regulated depositors
-- Multi-asset pool support beyond cUSDC
-
-Items in the second list are explicitly out of scope for the bounty deadline — see `build-brief.md` Section 10. They're listed here as direction, not commitments for September.
+- [Zama Solidity guides](https://docs.zama.org/protocol/solidity-guides)
+- [Zama encrypted randomness](https://docs.zama.org/protocol/solidity-guides/smart-contract/operations/random)
+- [Zama ACL examples](https://docs.zama.org/protocol/solidity-guides/smart-contract/acl/acl_examples)
+- [Zama user decryption example](https://docs.zama.org/protocol/examples/basic/decryption/fhe-user-decrypt-single-value)
+- [PoolTogether V5 protocol design](https://dev.pooltogether.com/protocol/design/)
+- [PoolTogether Prize Pool reference](https://dev.pooltogether.com/protocol/reference/prize-pool/)

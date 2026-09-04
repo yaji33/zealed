@@ -64,7 +64,13 @@
     "test": "hardhat test",
     "test:sepolia": "hardhat test --network sepolia",
     "typechain": "cross-env TS_NODE_TRANSPILE_ONLY=true hardhat typechain",
-    "deploy:sepolia": "hardhat deploy --network sepolia",
-    "keeper:sepolia": "hardhat run scripts/keeper-sepolia.ts --network sepolia"
+    "deploy:sepolia": "hardhat run scripts/deploy-sepolia.ts --network sepolia",
+    "deploy:sepolia:resume": "hardhat run scripts/resume-deploy-sepolia.ts --network sepolia",
+    "deploy:multivault:sepolia": "hardhat run scripts/deploy-multivault-sepolia.ts --network sepolia",
+    "vault:add:sepolia": "hardhat run scripts/add-vault-sepolia.ts --network sepolia",
+    "prizes:fund:sepolia": "hardhat run scripts/fund-prize-pools-sepolia.ts --network sepolia",
+    "keeper:sepolia": "hardhat run scripts/keeper-sepolia.ts --network sepolia",
+    "smoke:sepolia": "hardhat run scripts/smoke-sepolia.ts --network sepolia",
+    "smoke:draw:sepolia": "hardhat run scripts/smoke-draw-sepolia.ts --network sepolia"
   }
 }

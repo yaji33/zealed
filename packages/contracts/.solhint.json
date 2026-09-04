@@ -5,7 +5,11 @@
     "compiler-version": ["error", ">=0.8.4"],
     "func-visibility": ["error", { "ignoreConstructors": true }],
     "max-line-length": ["error", 120],
-    "named-parameters-mapping": "warn",
+    "named-parameters-mapping": "off",
+    "use-natspec": "off",
+    "immutable-vars-naming": "off",
+    "gas-strict-inequalities": "off",
+    "gas-indexed-events": "off",
     "no-console": "off",
     "not-rely-on-time": "off"
   }

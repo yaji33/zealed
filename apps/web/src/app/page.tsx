@@ -13,44 +13,49 @@ const CONTRACTS = [
   {
     name: "ConfidentialVault",
     address: addresses.vault,
-    body: "Holds the pool. Tracks each encrypted balance and its time-weighted average homomorphically. Deposit and withdraw anytime, with no lockup.",
+    body: "One principal custodian inside each curated asset system. Tracks encrypted balances and keeps withdrawal available through every draw phase.",
   },
   {
     name: "TicketEngine",
     address: addresses.ticketEngine,
-    body: "Turns encrypted balances into encrypted ticket weights, kept in a Fenwick tree so every update costs O(log n) and never touches another user's slot.",
+    body: "Versions encrypted balance-time checkpoints in a Fenwick tree so closed draws stay immutable while later deposits update a new active version.",
+  },
+  {
+    name: "PrizePool",
+    address: addresses.prizePool,
+    body: "Isolates sponsor-funded mock yield from principal. Allocates bounded Grand, Standard, and Community tiers plus reserve and rollover.",
   },
   {
     name: "DrawManager",
     address: addresses.drawManager,
-    body: "Fixes the random value by commit and reveal, then answers checkIfWon per user with one encrypted range comparison. Nothing loops over depositors.",
+    body: "Stores one encrypted FHE.randEuint64() value per bounded prize slot. Users check one slot at a time; nothing loops over depositors.",
   },
 ] as const;
 
 const FAQ = [
   {
     q: "Can I lose my deposit?",
-    a: "No. This is a no-loss design: only the yield the pool generates is drawn as prizes. Your principal is withdrawable at any time, and withdrawal is never gated by a draw cycle.",
+    a: "No. Principal stays in ConfidentialVault and is withdrawable at any time. Prizes are paid only from PrizePool sponsor-funded mock yield, never from saver principal.",
   },
   {
     q: "If balances are encrypted, how can the draw be fair?",
-    a: "The random value is public and fixed by commit and reveal against a future block hash, so anyone can verify it was not manipulated. It is compared against your encrypted ticket range onchain, so fairness is checkable without any balance ever being visible.",
+    a: "Each prize slot stores an encrypted random value generated onchain with FHE.randEuint64(). Your client compares that value against your encrypted historical range. Fairness does not require publishing your balance.",
   },
   {
     q: "Can anyone tell whether I won?",
-    a: "No. You check your own result, and the answer comes back encrypted to your key. A losing check and a winning check are indistinguishable onchain. If you want to, you can optionally publish that you won a tier, without the amount. That switch is off by default.",
+    a: "No. You check your own tier slot, and the answer stays encrypted. A losing check and a winning check look the same onchain. Optional tier-only disclosure never publishes the prize amount.",
   },
   {
     q: "What can the public actually see?",
-    a: "Aggregates only: the pool total, each draw's prize size, the draw schedule, and the random value. Individual deposits, balances, odds, and outcomes stay sealed.",
+    a: "Aggregates only: principal TVL when published, available prize liquidity, reserve, tier allocations and slot counts, draw lifecycle, and snapshot versions. Individual deposits, odds, outcomes, and prize amounts stay sealed.",
   },
   {
     q: "What asset does the pool hold?",
-    a: "Confidential USDC (cUSDC), an encrypted ERC-7984 token from the Zama wrappers registry. Amounts move as ciphertext end to end.",
+    a: "Zealed supports curated asset-specific ERC-7984 vaults. Each vault has isolated principal, eligibility snapshots, draws, and prize liquidity. The Sepolia faucet mints the selected vault's official mock underlying (cUSDC or cUSDT).",
   },
   {
     q: "Is this live?",
-    a: "Yes, on Ethereum Sepolia. All three contracts are deployed and verified on Etherscan, and the full flow runs against the live network: deposit, withdraw, draw settlement, and prize decryption.",
+    a: "Yes. The verified Sepolia registry exposes independent cUSDCMock and cUSDTMock vault systems with isolated principal, draws, and prize liquidity.",
   },
 ] as const;
 
@@ -65,7 +70,13 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-void font-inter leading-relaxed text-ink [&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0 [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
       <section className="relative flex min-h-svh overflow-hidden">
-        <Image src={heroBg} alt="" fill priority className="z-0 object-cover object-center" />
+        <Image
+          src={heroBg}
+          alt=""
+          fill
+          priority
+          className="z-0 object-cover object-center"
+        />
         <LandingHero />
       </section>
 
@@ -76,12 +87,13 @@ export default function HomePage() {
       <ScrollRevealSection id="contracts" className={sectionClass}>
         <h2>The contracts</h2>
         <p className="-mt-7 mb-10 max-w-[44rem] text-muted">
-          Zealed runs on the Zama Protocol&apos;s fhEVM. Contracts add, compare, and select over
-          encrypted values without ever decrypting them. The only plaintext number in the draw is
-          the public random value, and it reveals nothing about any position. Decryption happens
-          once, on your device, with your key.
+          Zealed runs on the Zama Protocol&apos;s fhEVM with one principal vault
+          and a separate prize pool. Contracts add, compare, and select over
+          encrypted values without decrypting them. Per-slot randomness stays
+          encrypted; decryption of your own result happens on your device with
+          your key.
         </p>
-        <StaggerGrid className="grid grid-cols-3 gap-5 max-[760px]:grid-cols-1">
+        <StaggerGrid className="grid grid-cols-2 gap-5 max-[760px]:grid-cols-1 xl:grid-cols-4">
           {CONTRACTS.map((contract) => (
             <StaggerItem
               key={contract.name}
@@ -91,7 +103,9 @@ export default function HomePage() {
                 className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/[0.06] to-transparent"
                 aria-hidden="true"
               />
-              <h3 className="relative font-mono text-base font-medium">{contract.name}</h3>
+              <h3 className="relative font-mono text-base font-medium">
+                {contract.name}
+              </h3>
               <p className="relative m-0 flex-1 text-[0.92rem] leading-relaxed text-muted">
                 {contract.body}
               </p>
@@ -105,7 +119,9 @@ export default function HomePage() {
                   {shortAddress(contract.address)}
                 </a>
               ) : (
-                <span className="relative font-mono text-[0.82rem] text-ember">not configured</span>
+                <span className="relative font-mono text-[0.82rem] text-ember">
+                  not configured
+                </span>
               )}
             </StaggerItem>
           ))}
@@ -126,15 +142,23 @@ export default function HomePage() {
         </div>
       </ScrollRevealSection>
 
-      <ScrollRevealSection as="footer" className="mx-auto w-full max-w-[1160px] px-6 pb-10 pt-20 font-inter text-ink">
+      <ScrollRevealSection
+        as="footer"
+        className="mx-auto w-full max-w-[1160px] px-6 pb-10 pt-20 font-inter text-ink"
+      >
         <div className="flex flex-wrap justify-between gap-10 border-t border-line pt-10">
           <div>
-            <span className="text-xl font-medium tracking-tight text-ink">Zealed</span>
+            <span className="text-xl font-medium tracking-tight text-ink">
+              Zealed
+            </span>
             <p className="mt-2.5 max-w-[20rem] text-[0.9rem] text-muted">
               Confidential prize savings. Save together, win in private.
             </p>
           </div>
-          <nav className="flex flex-col gap-[0.7rem] text-[0.9rem] [&_a]:text-muted [&_a:hover]:text-ink">
+          <nav
+            aria-label="Footer"
+            className="flex flex-col gap-[0.7rem] text-[0.9rem] [&_a]:text-muted [&_a:hover]:text-ink"
+          >
             <AnchorLink href="#how-it-works">How it works</AnchorLink>
             <AnchorLink href="#visible-vs-sealed">Visible vs sealed</AnchorLink>
             <AnchorLink href="#contracts">The contracts</AnchorLink>

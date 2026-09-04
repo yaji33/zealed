@@ -5,11 +5,35 @@ const LOOKBACK_BLOCKS = 120_000n;
 const CHUNK_BLOCKS = 8_000n;
 
 type EventQuery = Parameters<PublicClient["getContractEvents"]>[0];
+type ChunkParams = Omit<EventQuery, "fromBlock" | "toBlock" | "blockHash">;
 
-export async function getContractEventsChunked(
+async function fetchChunk(
   client: PublicClient,
-  params: Omit<EventQuery, "fromBlock" | "toBlock">,
-) {
+  params: ChunkParams,
+  start: bigint,
+  end: bigint,
+  chunkSize: bigint,
+): Promise<Awaited<ReturnType<PublicClient["getContractEvents"]>>> {
+  try {
+    return await client.getContractEvents({
+      ...params,
+      fromBlock: start,
+      toBlock: end,
+    });
+  } catch {
+    // Retry once with a smaller window — public RPCs often reject mid-range.
+    if (chunkSize <= 1_000n || end - start <= 1_000n) return [];
+    const half = chunkSize / 2n;
+    const mid = start + half > end ? end : start + half;
+    const [left, right] = await Promise.all([
+      fetchChunk(client, params, start, mid, half),
+      mid < end ? fetchChunk(client, params, mid + 1n, end, half) : Promise.resolve([]),
+    ]);
+    return [...left, ...right];
+  }
+}
+
+export async function getContractEventsChunked(client: PublicClient, params: ChunkParams) {
   const latest = await client.getBlockNumber();
   const from = latest > LOOKBACK_BLOCKS ? latest - LOOKBACK_BLOCKS : 0n;
   const ranges: { start: bigint; end: bigint }[] = [];
@@ -23,17 +47,7 @@ export async function getContractEventsChunked(
   for (let i = 0; i < ranges.length; i += concurrency) {
     const batch = ranges.slice(i, i + concurrency);
     const chunks = await Promise.all(
-      batch.map(async ({ start, end }) => {
-        try {
-          return await client.getContractEvents({
-            ...params,
-            fromBlock: start,
-            toBlock: end,
-          });
-        } catch {
-          return [];
-        }
-      }),
+      batch.map(({ start, end }) => fetchChunk(client, params, start, end, CHUNK_BLOCKS)),
     );
     for (const chunk of chunks) logs.push(...chunk);
   }

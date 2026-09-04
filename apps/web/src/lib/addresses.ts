@@ -14,6 +14,7 @@ export const addresses = {
   vault: readAddress(process.env.NEXT_PUBLIC_VAULT_ADDRESS),
   ticketEngine: readAddress(process.env.NEXT_PUBLIC_TICKET_ENGINE_ADDRESS),
   drawManager: readAddress(process.env.NEXT_PUBLIC_DRAW_MANAGER_ADDRESS),
+  prizePool: readAddress(process.env.NEXT_PUBLIC_PRIZE_POOL_ADDRESS),
   asset: readAddress(process.env.NEXT_PUBLIC_ASSET_ADDRESS),
   underlying:
     readAddress(process.env.NEXT_PUBLIC_UNDERLYING_ADDRESS) ?? SEPOLIA_UNDERLYING_USDC_MOCK,
@@ -23,6 +24,11 @@ export const OPERATOR_UNTIL = Number(2n ** 48n - 1n);
 
 export function contractsConfigured(): boolean {
   return Boolean(addresses.vault && addresses.ticketEngine && addresses.drawManager && addresses.asset);
+}
+
+/** True only when the complete multi-tier architecture has verified addresses configured. */
+export function multiTierContractsConfigured(): boolean {
+  return contractsConfigured() && Boolean(addresses.prizePool);
 }
 
 export function faucetConfigured(): boolean {

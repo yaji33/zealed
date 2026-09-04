@@ -1,89 +1,60 @@
 import { expect } from "chai";
 
-import { nextKeeperAction, revealTargetBlock, type KeeperSnapshot } from "../scripts/lib/keeperAction";
+import { nextKeeperAction, type KeeperSnapshot } from "../scripts/lib/keeperAction";
 
-function snap(over: Partial<KeeperSnapshot> = {}): KeeperSnapshot {
+function snapshot(overrides: Partial<KeeperSnapshot> = {}): KeeperSnapshot {
   return {
     drawId: 0n,
-    revealed: false,
-    lastCommitTimestamp: 0n,
-    minInterval: 20n * 60n,
+    periodStartTime: 1_000n,
     now: 1_000n,
-    blockNumber: 100n,
-    revealBlock: 0n,
-    maxRevealWindow: 256n,
-    ...over,
+    minInterval: 1_200n,
+    closed: false,
+    awarded: false,
+    claimDeadline: 0n,
+    reconciliationPrepared: false,
+    reconciled: false,
+    ...overrides,
   };
 }
 
-describe("keeperAction", () => {
-  it("commits immediately when no draw has ever been committed", () => {
-    expect(nextKeeperAction(snap())).to.equal("commit");
+describe("keeperAction", function () {
+  it("waits before the interval and closes when an initial or reconciled period matures", function () {
+    expect(nextKeeperAction(snapshot({ now: 2_199n }))).to.eq("wait");
+    expect(nextKeeperAction(snapshot({ now: 2_200n }))).to.eq("close");
+    expect(
+      nextKeeperAction(snapshot({ drawId: 1n, reconciled: true, now: 2_200n })),
+    ).to.eq("close");
   });
 
-  it("waits until MIN_DRAW_INTERVAL after the last commit", () => {
-    expect(
-      nextKeeperAction(
-        snap({
-          drawId: 1n,
-          revealed: true,
-          lastCommitTimestamp: 1_000n,
-          now: 1_000n + 20n * 60n - 1n,
-        }),
-      ),
-    ).to.equal("wait");
-    expect(
-      nextKeeperAction(
-        snap({
-          drawId: 1n,
-          revealed: true,
-          lastCommitTimestamp: 1_000n,
-          now: 1_000n + 20n * 60n,
-        }),
-      ),
-    ).to.equal("commit");
+  it("awards a closed non-awarded draw", function () {
+    expect(nextKeeperAction(snapshot({ drawId: 1n, closed: true }))).to.eq("award");
   });
 
-  it("waits while the reveal block is still in the future", () => {
+  it("waits during the claim window", function () {
     expect(
       nextKeeperAction(
-        snap({
+        snapshot({
           drawId: 1n,
-          revealed: false,
-          revealBlock: 110n,
-          blockNumber: 110n,
+          closed: true,
+          awarded: true,
+          claimDeadline: 5_000n,
+          now: 5_000n,
         }),
       ),
-    ).to.equal("wait");
+    ).to.eq("wait");
   });
 
-  it("reveals once the reveal block is in and the hash window is open", () => {
+  it("prepares then finalizes reconciliation after expiry", function () {
+    const expired = {
+      drawId: 1n,
+      closed: true,
+      awarded: true,
+      claimDeadline: 5_000n,
+      now: 5_001n,
+    };
+    expect(nextKeeperAction(snapshot(expired))).to.eq("prepare-reconciliation");
     expect(
-      nextKeeperAction(
-        snap({
-          drawId: 1n,
-          revealed: false,
-          revealBlock: 110n,
-          blockNumber: 111n,
-        }),
-      ),
-    ).to.equal("reveal");
-  });
-
-  it("flags a missed 256-block hash window", () => {
-    expect(
-      nextKeeperAction(
-        snap({
-          drawId: 1n,
-          revealed: false,
-          revealBlock: 110n,
-          blockNumber: 110n + 256n + 1n,
-        }),
-      ),
-    ).to.equal("missed");
-  });
-
-  it("places the reveal target past MIN_REVEAL_DELAY plus slack", () => {
-    expect(revealTargetBlock(100n, 5n, 32n)).to.equal(137n);
+      nextKeeperAction(snapshot({ ...expired, reconciliationPrepared: true })),
+    ).to.eq("finalize-reconciliation");
   });
 });

@@ -2,268 +2,129 @@ import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { expect } from "chai";
 import { ethers, fhevm } from "hardhat";
-import { FhevmType } from "@fhevm/hardhat-plugin";
 
-import { ConfidentialVault, ConfidentialVault__factory, MockERC7984, MockERC7984__factory, TicketEngine, TicketEngine__factory } from "../types";
-
-type Signers = {
-  deployer: HardhatEthersSigner;
-  alice: HardhatEthersSigner;
-  bob: HardhatEthersSigner;
-};
-
-async function deployFixture() {
-  const tokenFactory = (await ethers.getContractFactory("MockERC7984")) as MockERC7984__factory;
-  const token = (await tokenFactory.deploy()) as MockERC7984;
-  const tokenAddress = await token.getAddress();
-
-  const vaultFactory = (await ethers.getContractFactory("ConfidentialVault")) as ConfidentialVault__factory;
-  const vault = (await vaultFactory.deploy(tokenAddress)) as ConfidentialVault;
-  const vaultAddress = await vault.getAddress();
-
-  return { token, tokenAddress, vault, vaultAddress };
-}
-
-async function encryptAmount(contractAddress: string, user: string, amount: number) {
-  return fhevm.createEncryptedInput(contractAddress, user).add64(amount).encrypt();
-}
+import { ConfidentialVault__factory } from "../types";
+import {
+  decryptTokenBalance,
+  decryptUserValue,
+  deploySystem,
+  deposit,
+  encryptAmount,
+  publicDecrypt,
+  SystemFixture,
+  withdraw,
+} from "./helpers";
 
 describe("ConfidentialVault", function () {
-  let signers: Signers;
-  let token: MockERC7984;
-  let tokenAddress: string;
-  let vault: ConfidentialVault;
-  let vaultAddress: string;
-
-  const OPERATOR_UNTIL = 2n ** 48n - 1n;
+  let fixture: SystemFixture;
+  let deployer: HardhatEthersSigner;
+  let alice: HardhatEthersSigner;
+  let bob: HardhatEthersSigner;
 
   before(async function () {
-    const ethSigners: HardhatEthersSigner[] = await ethers.getSigners();
-    signers = { deployer: ethSigners[0], alice: ethSigners[1], bob: ethSigners[2] };
+    [deployer, alice, bob] = await ethers.getSigners();
   });
 
   beforeEach(async function () {
-    if (!fhevm.isMock) {
-      console.warn("ConfidentialVault unit tests require the FHEVM mock environment");
-      this.skip();
-    }
-
-    ({ token, tokenAddress, vault, vaultAddress } = await deployFixture());
+    if (!fhevm.isMock) this.skip();
+    fixture = await deploySystem();
   });
 
-  async function mintAndApprove(user: HardhatEthersSigner, amount: number) {
-    await (await token.mint(user.address, amount)).wait();
-    await (await token.connect(user).setOperator(vaultAddress, OPERATOR_UNTIL)).wait();
+  async function userBalance(user: HardhatEthersSigner): Promise<bigint> {
+    return decryptUserValue(await fixture.vault.connect(user).getBalance(), fixture.vaultAddress, user);
   }
 
-  async function decryptUserBalance(user: HardhatEthersSigner): Promise<bigint> {
-    const handle = await vault.connect(user).getBalance();
-    return fhevm.userDecryptEuint(FhevmType.euint64, handle, vaultAddress, user);
+  async function userTwab(user: HardhatEthersSigner): Promise<bigint> {
+    return decryptUserValue(await fixture.vault.connect(user).getTwab(), fixture.vaultAddress, user);
   }
 
-  async function decryptUserTwab(user: HardhatEthersSigner): Promise<bigint> {
-    const handle = await vault.connect(user).getTwab();
-    return fhevm.userDecryptEuint(FhevmType.euint64, handle, vaultAddress, user);
+  async function totalDeposits(): Promise<bigint> {
+    return (await publicDecrypt(await fixture.vault.totalDeposits())).clear;
   }
 
-  async function decryptTokenBalance(user: HardhatEthersSigner): Promise<bigint> {
-    const handle = await token.confidentialBalanceOf(user.address);
-    return fhevm.userDecryptEuint(FhevmType.euint64, handle, tokenAddress, user);
-  }
-
-  it("reverts when constructed with the zero asset address", async function () {
-    const vaultFactory = (await ethers.getContractFactory("ConfidentialVault")) as ConfidentialVault__factory;
-    await expect(vaultFactory.deploy(ethers.ZeroAddress)).to.be.revertedWithCustomError(
-      vaultFactory,
-      "InvalidAsset",
-    );
-  });
-
-  it("deposits encrypted amount and updates balance + TWAB without emitting plaintext amounts", async function () {
-    const depositAmount = 1_000_000;
-    await mintAndApprove(signers.alice, depositAmount);
-
-    const encrypted = await encryptAmount(vaultAddress, signers.alice.address, depositAmount);
-
-    await expect(vault.connect(signers.alice).deposit(encrypted.handles[0], encrypted.inputProof))
-      .to.emit(vault, "Deposited")
-      .withArgs(signers.alice.address);
-
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(depositAmount));
-    // Immediate deposit: TWAB equals current balance.
-    expect(await decryptUserTwab(signers.alice)).to.eq(BigInt(depositAmount));
-    expect(await decryptTokenBalance(signers.alice)).to.eq(0n);
-  });
-
-  it("withdraws principal at any time with no lockup", async function () {
-    const depositAmount = 2_000_000;
-    const withdrawAmount = 750_000;
-    await mintAndApprove(signers.alice, depositAmount);
-
-    const depositEnc = await encryptAmount(vaultAddress, signers.alice.address, depositAmount);
-    await (await vault.connect(signers.alice).deposit(depositEnc.handles[0], depositEnc.inputProof)).wait();
-
-    // Advance time to prove withdraw is not gated by any draw / period boundary.
-    await time.increase(7 * 24 * 60 * 60);
-
-    const withdrawEnc = await encryptAmount(vaultAddress, signers.alice.address, withdrawAmount);
-    await expect(vault.connect(signers.alice).withdraw(withdrawEnc.handles[0], withdrawEnc.inputProof))
-      .to.emit(vault, "Withdrawn")
-      .withArgs(signers.alice.address);
-
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(depositAmount - withdrawAmount));
-    expect(await decryptTokenBalance(signers.alice)).to.eq(BigInt(withdrawAmount));
-  });
-
-  it("transfers zero and keeps balance when withdraw exceeds encrypted balance", async function () {
-    const depositAmount = 100_000;
-    await mintAndApprove(signers.alice, depositAmount);
-
-    const depositEnc = await encryptAmount(vaultAddress, signers.alice.address, depositAmount);
-    await (await vault.connect(signers.alice).deposit(depositEnc.handles[0], depositEnc.inputProof)).wait();
-
-    const oversized = await encryptAmount(vaultAddress, signers.alice.address, depositAmount * 2);
-    await expect(vault.connect(signers.alice).withdraw(oversized.handles[0], oversized.inputProof)).to.not.be
-      .reverted;
-
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(depositAmount));
-    expect(await decryptTokenBalance(signers.alice)).to.eq(0n);
-  });
-
-  it("accrues TWAB over time as a time-weighted average of balance", async function () {
-    const firstDeposit = 1_000_000;
-    await mintAndApprove(signers.alice, firstDeposit * 2);
-
-    const firstEnc = await encryptAmount(vaultAddress, signers.alice.address, firstDeposit);
-    await (await vault.connect(signers.alice).deposit(firstEnc.handles[0], firstEnc.inputProof)).wait();
-
-    const firstTs = await vault.lastUpdateOf(signers.alice.address);
-    await time.increaseTo(firstTs + 100n);
-
-    const secondEnc = await encryptAmount(vaultAddress, signers.alice.address, firstDeposit);
-    await (await vault.connect(signers.alice).deposit(secondEnc.handles[0], secondEnc.inputProof)).wait();
-
-    // After 100s at 1_000_000 then an instantaneous bump to 2_000_000,
-    // TWAB should still equal 1_000_000 (weighted entirely by the prior window).
-    expect(await decryptUserTwab(signers.alice)).to.eq(BigInt(firstDeposit));
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(firstDeposit * 2));
-  });
-
-  it("isolates balances across depositors", async function () {
-    const aliceAmount = 500_000;
-    const bobAmount = 250_000;
-    await mintAndApprove(signers.alice, aliceAmount);
-    await mintAndApprove(signers.bob, bobAmount);
-
-    const aliceEnc = await encryptAmount(vaultAddress, signers.alice.address, aliceAmount);
-    const bobEnc = await encryptAmount(vaultAddress, signers.bob.address, bobAmount);
-
-    await (await vault.connect(signers.alice).deposit(aliceEnc.handles[0], aliceEnc.inputProof)).wait();
-    await (await vault.connect(signers.bob).deposit(bobEnc.handles[0], bobEnc.inputProof)).wait();
-
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(aliceAmount));
-    expect(await decryptUserBalance(signers.bob)).to.eq(BigInt(bobAmount));
-  });
-
-  async function publicDecryptTotal(): Promise<bigint> {
-    const handle = await vault.totalDeposits();
-    const result = await fhevm.publicDecrypt([handle]);
-    return result.clearValues[handle] as bigint;
-  }
-
-  it("tracks publicly decryptable TVL across deposits/withdraws; oversized withdraw leaves total unchanged", async function () {
-    const aliceDeposit = 1_000_000;
-    const bobDeposit = 400_000;
-    const aliceWithdraw = 250_000;
-    await mintAndApprove(signers.alice, aliceDeposit);
-    await mintAndApprove(signers.bob, bobDeposit);
-
-    expect(await publicDecryptTotal()).to.eq(0n);
-
-    const aliceEnc = await encryptAmount(vaultAddress, signers.alice.address, aliceDeposit);
-    await (await vault.connect(signers.alice).deposit(aliceEnc.handles[0], aliceEnc.inputProof)).wait();
-    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit));
-
-    const bobEnc = await encryptAmount(vaultAddress, signers.bob.address, bobDeposit);
-    await (await vault.connect(signers.bob).deposit(bobEnc.handles[0], bobEnc.inputProof)).wait();
-    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit + bobDeposit));
-
-    const withdrawEnc = await encryptAmount(vaultAddress, signers.alice.address, aliceWithdraw);
-    await (await vault.connect(signers.alice).withdraw(withdrawEnc.handles[0], withdrawEnc.inputProof)).wait();
-    expect(await publicDecryptTotal()).to.eq(BigInt(aliceDeposit + bobDeposit - aliceWithdraw));
-
-    const totalBeforeNoOp = await publicDecryptTotal();
-    const oversized = await encryptAmount(vaultAddress, signers.bob.address, bobDeposit * 10);
-    await (await vault.connect(signers.bob).withdraw(oversized.handles[0], oversized.inputProof)).wait();
-    expect(await publicDecryptTotal()).to.eq(totalBeforeNoOp);
-    expect(await decryptUserBalance(signers.bob)).to.eq(BigInt(bobDeposit));
-  });
-
-  it("reverts when setTicketEngine is called with the zero address", async function () {
-    await expect(vault.setTicketEngine(ethers.ZeroAddress)).to.be.revertedWithCustomError(
-      vault,
+  it("rejects zero-address dependencies and protects TicketEngine configuration", async function () {
+    const factory = (await ethers.getContractFactory("ConfidentialVault")) as ConfidentialVault__factory;
+    await expect(factory.deploy(ethers.ZeroAddress)).to.be.revertedWithCustomError(factory, "InvalidAsset");
+    await expect(fixture.vault.setTicketEngine(ethers.ZeroAddress)).to.be.revertedWithCustomError(
+      fixture.vault,
       "InvalidTicketEngine",
     );
+    expect(await fixture.vault.ticketEngine()).to.eq(fixture.ticketsAddress);
+    expect(await fixture.vault.owner()).to.eq(deployer.address);
   });
 
-  it("withdraws successfully while TicketEngine is frozen; weight sync lags until unfreeze", async function () {
-    const ticketFactory = (await ethers.getContractFactory("TicketEngine")) as TicketEngine__factory;
-    const tickets = (await ticketFactory.deploy(vaultAddress)) as TicketEngine;
-    const ticketsAddress = await tickets.getAddress();
+  it("deposits encrypted principal and exposes only wallet-authorized balances", async function () {
+    const amount = 1_000_000;
 
-    await (await vault.setTicketEngine(ticketsAddress)).wait();
-    await (await tickets.setDrawManager(signers.deployer.address)).wait();
+    await (await fixture.token.mint(alice.address, amount)).wait();
+    const encrypted = await encryptAmount(fixture.vaultAddress, alice.address, amount);
+    await (await fixture.token.connect(alice).setOperator(fixture.vaultAddress, 2n ** 48n - 1n)).wait();
+    await expect(fixture.vault.connect(alice).deposit(encrypted.handles[0], encrypted.inputProof))
+      .to.emit(fixture.vault, "Deposited")
+      .withArgs(alice.address);
 
-    const depositAmount = 1_000_000;
-    const withdrawAmount = 250_000;
-    await mintAndApprove(signers.alice, depositAmount);
+    expect(await userBalance(alice)).to.eq(BigInt(amount));
+    expect(await userTwab(alice)).to.eq(BigInt(amount));
+    expect(await decryptTokenBalance(fixture, alice)).to.eq(0n);
 
-    const depositEnc = await encryptAmount(vaultAddress, signers.alice.address, depositAmount);
-    await (await vault.connect(signers.alice).deposit(depositEnc.handles[0], depositEnc.inputProof)).wait();
+    const aliceHandle = await fixture.vault.getBalanceOf(alice.address);
+    let denied = false;
+    try {
+      await decryptUserValue(aliceHandle, fixture.vaultAddress, bob);
+    } catch {
+      denied = true;
+    }
+    expect(denied).to.eq(true);
+  });
 
-    const index = await tickets.indexOf(signers.alice.address);
-    expect(index).to.eq(1n);
+  it("withdraws encrypted principal immediately and keeps TVL exact", async function () {
+    const aliceDeposit = 2_000_000;
+    const bobDeposit = 400_000;
+    const withdrawn = 750_000;
+    await deposit(fixture, alice, aliceDeposit);
+    await deposit(fixture, bob, bobDeposit);
 
-    const weightAfterDeposit = await fhevm.userDecryptEuint(
-      FhevmType.euint64,
-      await tickets.getWeight(index),
-      ticketsAddress,
-      signers.alice,
-    );
-    expect(weightAfterDeposit).to.eq(BigInt(depositAmount));
+    expect(await totalDeposits()).to.eq(BigInt(aliceDeposit + bobDeposit));
+    await time.increase(1);
 
-    // Freeze ticket weights for an active draw — vault withdraw must still succeed.
-    await (await tickets.connect(signers.deployer).setFrozen(true)).wait();
+    const encrypted = await encryptAmount(fixture.vaultAddress, alice.address, withdrawn);
+    await expect(fixture.vault.connect(alice).withdraw(encrypted.handles[0], encrypted.inputProof))
+      .to.emit(fixture.vault, "Withdrawn")
+      .withArgs(alice.address);
 
-    const withdrawEnc = await encryptAmount(vaultAddress, signers.alice.address, withdrawAmount);
-    await expect(vault.connect(signers.alice).withdraw(withdrawEnc.handles[0], withdrawEnc.inputProof)).to.not.be
-      .reverted;
+    expect(await userBalance(alice)).to.eq(BigInt(aliceDeposit - withdrawn));
+    expect(await decryptTokenBalance(fixture, alice)).to.eq(BigInt(withdrawn));
+    expect(await totalDeposits()).to.eq(BigInt(aliceDeposit + bobDeposit - withdrawn));
+  });
 
-    expect(await decryptUserBalance(signers.alice)).to.eq(BigInt(depositAmount - withdrawAmount));
-    expect(await decryptTokenBalance(signers.alice)).to.eq(BigInt(withdrawAmount));
+  it("turns an oversized encrypted withdrawal into a zero-value no-op", async function () {
+    const amount = 100_000;
+    await deposit(fixture, alice, amount);
 
-    // Ticket weight lagged: still the pre-withdraw TWAB while frozen.
-    const weightWhileFrozen = await fhevm.userDecryptEuint(
-      FhevmType.euint64,
-      await tickets.getWeight(index),
-      ticketsAddress,
-      signers.alice,
-    );
-    expect(weightWhileFrozen).to.eq(BigInt(depositAmount));
+    await withdraw(fixture, alice, amount + 1);
+    expect(await userBalance(alice)).to.eq(BigInt(amount));
+    expect(await decryptTokenBalance(fixture, alice)).to.eq(0n);
+    expect(await totalDeposits()).to.eq(BigInt(amount));
+  });
 
-    // After freeze lifts, the next vault action syncs the lagged TWAB (not raw balance).
-    await (await tickets.connect(signers.deployer).setFrozen(false)).wait();
-    const catchUpEnc = await encryptAmount(vaultAddress, signers.alice.address, 0);
-    await (await vault.connect(signers.alice).withdraw(catchUpEnc.handles[0], catchUpEnc.inputProof)).wait();
+  it("updates cumulative-balance observations without mixing depositor state", async function () {
+    await deposit(fixture, alice, 1_000_000);
+    const firstCheckpoint = await fixture.vault.lastUpdateOf(alice.address);
+    await time.increaseTo(firstCheckpoint + 100n);
+    await deposit(fixture, alice, 1_000_000);
+    await deposit(fixture, bob, 250_000);
 
-    const twabAfterUnfreeze = await decryptUserTwab(signers.alice);
-    const weightAfterUnfreeze = await fhevm.userDecryptEuint(
-      FhevmType.euint64,
-      await tickets.getWeight(index),
-      ticketsAddress,
-      signers.alice,
-    );
-    expect(weightAfterUnfreeze).to.eq(twabAfterUnfreeze);
-    expect(weightAfterUnfreeze).to.not.eq(BigInt(depositAmount));
+    expect(await userTwab(alice)).to.eq(1_000_000n);
+    expect(await userBalance(alice)).to.eq(2_000_000n);
+    expect(await userBalance(bob)).to.eq(250_000n);
+    expect(await fixture.tickets.indexOf(alice.address)).to.eq(1n);
+    expect(await fixture.tickets.indexOf(bob.address)).to.eq(2n);
+  });
+
+  it("emits no plaintext amount fields for vault actions", async function () {
+    for (const name of ["Deposited", "Withdrawn"] as const) {
+      const event = fixture.vault.interface.getEvent(name);
+      expect(event.inputs.map((input) => input.name)).to.deep.eq(["account"]);
+    }
   });
 });

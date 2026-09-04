@@ -1,4 +1,4 @@
-import { ethers } from "hardhat";
+import { ethers, run } from "hardhat";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -28,8 +28,14 @@ async function main() {
   const ticketsAddress = await tickets.getAddress();
   console.log("TicketEngine:", ticketsAddress);
 
+  const PrizePool = await ethers.getContractFactory("PrizePool");
+  const prizePool = await PrizePool.deploy(asset, [5_000, 3_000, 1_500], [1, 2, 4], 500);
+  await prizePool.waitForDeployment();
+  const prizePoolAddress = await prizePool.getAddress();
+  console.log("PrizePool:", prizePoolAddress);
+
   const Draw = await ethers.getContractFactory("DrawManager");
-  const draw = await Draw.deploy(ticketsAddress, vaultAddress);
+  const draw = await Draw.deploy(ticketsAddress, vaultAddress, prizePoolAddress);
   await draw.waitForDeployment();
   const drawAddress = await draw.getAddress();
   console.log("DrawManager:", drawAddress);
@@ -42,13 +48,22 @@ async function main() {
   await tx2.wait();
   console.log("wired tickets.setDrawManager");
 
+  const tx3 = await prizePool.setDrawManager(drawAddress);
+  await tx3.wait();
+  console.log("wired prizePool.setDrawManager");
+
   // Sanity: vault already set in TicketEngine constructor; reaffirm if ever rotated.
   const wiredVault = await tickets.vault();
   if (wiredVault.toLowerCase() !== vaultAddress.toLowerCase()) {
-    const tx3 = await tickets.setVault(vaultAddress);
-    await tx3.wait();
+    const tx4 = await tickets.setVault(vaultAddress);
+    await tx4.wait();
     console.log("wired tickets.setVault");
   }
+
+  await (await vault.renounceOwnership()).wait();
+  await (await tickets.renounceOwnership()).wait();
+  await (await prizePool.renounceOwnership()).wait();
+  console.log("renounced deployment ownership");
 
   const deployment = {
     network: "sepolia",
@@ -59,6 +74,7 @@ async function main() {
     contracts: {
       ConfidentialVault: vaultAddress,
       TicketEngine: ticketsAddress,
+      PrizePool: prizePoolAddress,
       DrawManager: drawAddress,
     },
   };
@@ -69,6 +85,31 @@ async function main() {
   fs.writeFileSync(outFile, JSON.stringify(deployment, null, 2) + "\n");
   console.log("Wrote", outFile);
   console.log(JSON.stringify(deployment, null, 2));
+
+  if (process.env.VERIFY_CONTRACTS !== "0") {
+    const targets = [
+      { address: vaultAddress, constructorArguments: [asset] },
+      { address: ticketsAddress, constructorArguments: [vaultAddress] },
+      {
+        address: prizePoolAddress,
+        constructorArguments: [asset, [5_000, 3_000, 1_500], [1, 2, 4], 500],
+      },
+      {
+        address: drawAddress,
+        constructorArguments: [ticketsAddress, vaultAddress, prizePoolAddress],
+      },
+    ];
+    for (const target of targets) {
+      try {
+        await run("verify:verify", target);
+        console.log("verified", target.address);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.toLowerCase().includes("already verified")) throw error;
+        console.log("already verified", target.address);
+      }
+    }
+  }
 }
 
 main().catch((e) => {

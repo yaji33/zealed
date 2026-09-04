@@ -1,32 +1,30 @@
 export type KeeperSnapshot = {
   drawId: bigint;
-  revealed: boolean;
-  lastCommitTimestamp: bigint;
-  minInterval: bigint;
+  periodStartTime: bigint;
   now: bigint;
-  blockNumber: bigint;
-  revealBlock: bigint;
-  maxRevealWindow: bigint;
+  minInterval: bigint;
+  closed: boolean;
+  awarded: boolean;
+  claimDeadline: bigint;
+  reconciliationPrepared: boolean;
+  reconciled: boolean;
 };
 
-export type KeeperAction = "wait" | "commit" | "reveal" | "missed";
+export type KeeperAction =
+  | "wait"
+  | "close"
+  | "award"
+  | "prepare-reconciliation"
+  | "finalize-reconciliation";
 
-/**
- * Permissionless keeper schedule. Never inspects depositors.
- * `commit` after MIN_DRAW_INTERVAL; `reveal` after the reveal block and inside the 256-block window.
- */
-export function nextKeeperAction(s: KeeperSnapshot): KeeperAction {
-  const pending = s.drawId > 0n && !s.revealed;
-  if (pending) {
-    if (s.blockNumber <= s.revealBlock) return "wait";
-    if (s.blockNumber > s.revealBlock + s.maxRevealWindow) return "missed";
-    return "reveal";
+/** Returns the next permissionless lifecycle action without inspecting depositors. */
+export function nextKeeperAction(snapshot: KeeperSnapshot): KeeperAction {
+  if (snapshot.drawId === 0n || snapshot.reconciled) {
+    return snapshot.now >= snapshot.periodStartTime + snapshot.minInterval ? "close" : "wait";
   }
-  const nextCommitAt = s.lastCommitTimestamp === 0n ? 0n : s.lastCommitTimestamp + s.minInterval;
-  return s.now >= nextCommitAt ? "commit" : "wait";
-}
-
-/** Reveal block far enough ahead that a pending tx cannot miss MIN_REVEAL_DELAY. */
-export function revealTargetBlock(blockNumber: bigint, minRevealDelay: bigint, slack: bigint): bigint {
-  return blockNumber + minRevealDelay + slack;
+  if (snapshot.closed && !snapshot.awarded) return "award";
+  if (snapshot.awarded && snapshot.now > snapshot.claimDeadline) {
+    return snapshot.reconciliationPrepared ? "finalize-reconciliation" : "prepare-reconciliation";
+  }
+  return "wait";
 }

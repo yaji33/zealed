@@ -1,19 +1,30 @@
 import { ethers } from "hardhat";
-import deployment from "../deployments/sepolia.json";
-import { nextKeeperAction, revealTargetBlock } from "./lib/keeperAction";
+import { nextKeeperAction } from "./lib/keeperAction";
+import { registeredVaultSystems } from "./lib/registrySystems";
 
 const RPC =
   process.env.SEPOLIA_RPC_URL ??
   (process.env.INFURA_API_KEY
     ? `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}`
     : "https://ethereum-sepolia-rpc.publicnode.com");
-
-const DRAW_GAS = 1_500_000n;
-const REVEAL_SLACK = 32n;
 const POLL_MS = 15_000;
-const OPERATOR_UNTIL = 2n ** 48n - 1n;
-/** Matches DrawManager.YIELD_DIVISOR. */
-const YIELD_DIVISOR = 120_000n;
+const MAX_KEEPER_VAULTS = 32;
+
+type Stack = {
+  id: string;
+  asset: string;
+  vault: string;
+  ticketEngine: string;
+  prizePool: string;
+  drawManager: string;
+};
+
+type RelayerInstance = {
+  publicDecrypt(handles: string[]): Promise<{
+    clearValues: Record<string, unknown>;
+    decryptionProof: Uint8Array | string;
+  }>;
+};
 
 function toHex(value: Uint8Array | string): string {
   if (typeof value === "string") return value.startsWith("0x") ? value : `0x${value}`;
@@ -24,41 +35,110 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function main() {
-  const sdk = await import("@zama-fhe/relayer-sdk/node");
+function bufferedGas(estimate: bigint): bigint {
+  return (estimate * 125n) / 100n;
+}
+
+async function publicDecrypt(instance: RelayerInstance, handle: string): Promise<{ clear: bigint; proof: string }> {
+  const result = await instance.publicDecrypt([handle]);
+  return {
+    clear: BigInt(String(result.clearValues[handle] ?? 0)),
+    proof: toHex(result.decryptionProof),
+  };
+}
+
+async function configuredStacks(): Promise<Stack[]> {
+  const systems = await registeredVaultSystems();
+  if (systems.length > MAX_KEEPER_VAULTS) {
+    throw new Error(`Registry has ${systems.length} active entries; keeper limit is ${MAX_KEEPER_VAULTS}.`);
+  }
+  return systems;
+}
+
+async function tickStack(stack: Stack, instance: RelayerInstance): Promise<void> {
   const [signer] = await ethers.getSigners();
-  const rpcFromHH = (ethers.provider as unknown as { _getConnection?: () => { url?: string } })._getConnection?.()?.url;
-  const instance = await sdk.createInstance({
-    ...sdk.SepoliaConfig,
-    network: rpcFromHH || RPC,
+  const draw = await ethers.getContractAt("DrawManager", stack.drawManager, signer);
+  const tickets = await ethers.getContractAt("TicketEngine", stack.ticketEngine, signer);
+  const prizePool = await ethers.getContractAt("PrizePool", stack.prizePool, signer);
+
+  const id = await draw.drawId();
+  const periodStartTime = await draw.periodStartTime();
+  const minInterval = await draw.MIN_DRAW_INTERVAL();
+  const now = BigInt((await ethers.provider.getBlock("latest"))?.timestamp ?? 0);
+  const state =
+    id === 0n
+      ? {
+          startVersion: 0n,
+          startTime: 0n,
+          endVersion: 0n,
+          endTime: 0n,
+          totalScore: 0n,
+          claimDeadline: 0n,
+          closed: false,
+          awarded: false,
+          reconciliationPrepared: false,
+          reconciled: false,
+        }
+      : await draw.draws(id);
+
+  const action = nextKeeperAction({
+    drawId: id,
+    periodStartTime,
+    now,
+    minInterval,
+    closed: state.closed,
+    awarded: state.awarded,
+    claimDeadline: state.claimDeadline,
+    reconciliationPrepared: state.reconciliationPrepared,
+    reconciled: state.reconciled,
   });
 
-  const draw = await ethers.getContractAt("DrawManager", deployment.contracts.DrawManager, signer);
-  const tickets = await ethers.getContractAt("TicketEngine", deployment.contracts.TicketEngine, signer);
-  const vault = await ethers.getContractAt("ConfidentialVault", deployment.contracts.ConfidentialVault, signer);
-  const asset = await ethers.getContractAt(
-    [
-      "function setOperator(address operator, uint48 until) external",
-      "function isOperator(address holder, address spender) view returns (bool)",
-    ],
-    deployment.asset,
-    signer,
-  );
-
-  const drawAddress = deployment.contracts.DrawManager;
-  console.log("keeper", signer.address, "draw", drawAddress);
-
-  try {
-    const isOp = await asset.isOperator(signer.address, drawAddress);
-    if (!isOp) {
-      const tx = await asset.setOperator(drawAddress, OPERATOR_UNTIL, { gasLimit: 300_000n });
+  if (action === "close") {
+    if ((await tickets.nextIndex()) <= 1n) {
+      console.log(`[${stack.id}] keeper waiting for first depositor`);
+    } else {
+      const gasLimit = bufferedGas(await draw.closeDraw.estimateGas());
+      const tx = await draw.closeDraw({ gasLimit });
       await tx.wait();
-      console.log("setOperator(DrawManager) for prize pot funding");
+      console.log(`[${stack.id}] keeper closed draw`, tx.hash);
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn("operator check/set skipped:", message.split("\n")[0]);
+  } else if (action === "award") {
+    await (await prizePool.prepareLiquidity({ gasLimit: 500_000n })).wait();
+    const liquidity = await publicDecrypt(instance, toHex(await prizePool.liquidityBalanceHandle()));
+    if (liquidity.clear === 0n) {
+      throw new Error("Prize pool is empty; run prizes:fund:sepolia before awarding.");
+    }
+    await (await prizePool.finalizeLiquidity(liquidity.clear, liquidity.proof, { gasLimit: 500_000n })).wait();
+
+    const score = await publicDecrypt(instance, toHex(await tickets.preparedTotal()));
+    if (score.clear === 0n) {
+      const tx = await draw.cancelEmptyDraw(id, score.proof, { gasLimit: 500_000n });
+      await tx.wait();
+      console.log(`[${stack.id}] keeper cancelled empty draw`, tx.hash);
+    } else {
+      const gasLimit = bufferedGas(await draw.awardDraw.estimateGas(id, score.clear, score.proof));
+      const tx = await draw.awardDraw(id, score.clear, score.proof, { gasLimit });
+      await tx.wait();
+      console.log(`[${stack.id}] keeper awarded draw`, tx.hash);
+    }
+  } else if (action === "prepare-reconciliation") {
+    const tx = await draw.prepareReconciliation(id, { gasLimit: 800_000n });
+    await tx.wait();
+    console.log(`[${stack.id}] keeper prepared rollover`, tx.hash);
+  } else if (action === "finalize-reconciliation") {
+    const balance = await publicDecrypt(instance, toHex(await prizePool.reconciliationBalanceHandle()));
+    const tx = await draw.finalizeReconciliation(id, balance.clear, balance.proof, {
+      gasLimit: 800_000n,
+    });
+    await tx.wait();
+    console.log(`[${stack.id}] keeper finalized rollover`, tx.hash);
   }
+}
+
+async function main() {
+  const sdk = await import("@zama-fhe/relayer-sdk/node");
+  const rpcFromHH = (ethers.provider as unknown as { _getConnection?: () => { url?: string } })._getConnection?.()?.url;
+  const instance = await sdk.createInstance({ ...sdk.SepoliaConfig, network: rpcFromHH || RPC });
 
   let stopping = false;
   process.on("SIGINT", () => {
@@ -66,87 +146,23 @@ async function main() {
   });
 
   while (!stopping) {
-    try {
-      const [
-        drawId,
-        revealed,
-        lastCommitTimestamp,
-        minInterval,
-        minRevealDelay,
-        maxRevealWindow,
-        revealBlock,
-        block,
-        now,
-      ] = await Promise.all([
-        draw.drawId(),
-        draw.revealed(),
-        draw.lastCommitTimestamp(),
-        draw.MIN_DRAW_INTERVAL(),
-        draw.MIN_REVEAL_DELAY(),
-        draw.MAX_REVEAL_WINDOW(),
-        draw.revealBlock(),
-        ethers.provider.getBlockNumber(),
-        ethers.provider.getBlock("latest").then((b) => BigInt(b?.timestamp ?? 0)),
-      ]);
-
-      const action = nextKeeperAction({
-        drawId,
-        revealed,
-        lastCommitTimestamp,
-        minInterval,
-        now,
-        blockNumber: BigInt(block),
-        revealBlock,
-        maxRevealWindow,
-      });
-
-      if (action === "commit") {
-        const ticketHandle = toHex(await tickets.totalTickets());
-        const ticketPub = await instance.publicDecrypt([ticketHandle]);
-        const totalTickets = BigInt(String(ticketPub.clearValues[ticketHandle] ?? 0));
-        if (totalTickets === 0n) {
-          console.log("skip commit: pool has no tickets");
-        } else {
-          const tvlHandle = toHex(await vault.totalDeposits());
-          const tvlPub = await instance.publicDecrypt([tvlHandle]);
-          const tvl = BigInt(String(tvlPub.clearValues[tvlHandle] ?? 0));
-          const elapsed = lastCommitTimestamp === 0n ? minInterval : now - lastCommitTimestamp;
-          const prize = (tvl * elapsed) / YIELD_DIVISOR;
-          if (prize === 0n) {
-            console.log("skip commit: computed prize is zero");
-          } else {
-            const target = revealTargetBlock(BigInt(block), minRevealDelay, REVEAL_SLACK);
-            const tx = await draw.commitDraw(target, tvl, toHex(tvlPub.decryptionProof), {
-              gasLimit: DRAW_GAS,
-            });
-            await tx.wait();
-            console.log("commitDraw", tx.hash);
-          }
-        }
-      } else if (action === "reveal") {
-        const handle = toHex(await tickets.totalTickets());
-        const pub = await instance.publicDecrypt([handle]);
-        const total = BigInt(String(pub.clearValues[handle] ?? 0));
-        if (total === 0n) {
-          console.log("skip reveal: pool has no tickets");
-        } else {
-          const tx = await draw.revealDraw(total, toHex(pub.decryptionProof), { gasLimit: DRAW_GAS });
-          await tx.wait();
-          console.log("revealDraw", tx.hash);
-        }
-      } else if (action === "missed") {
-        console.log("reveal window missed; new commits are blocked until this draw can settle");
+    const stacks = await configuredStacks();
+    if (stacks.length === 0) throw new Error("Registry has no active vault systems.");
+    for (const stack of stacks) {
+      try {
+        await tickStack(stack, instance);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[${stack.id}] keeper tick failed:`, message.split("\n")[0]);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("keeper tick failed:", message.split("\n")[0]);
     }
 
+    if (process.env.KEEPER_ONCE === "1") break;
     if (!stopping) await sleep(POLL_MS);
   }
 }
 
-main().catch((e) => {
-  console.error(e);
+main().catch((error) => {
+  console.error(error);
   process.exit(1);
 });

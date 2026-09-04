@@ -15,8 +15,8 @@ import {TicketEngine} from "./TicketEngine.sol";
  * @notice Holds cUSDC (ERC-7984) deposits with encrypted balances and TWAB.
  * @dev Principal is withdrawable at any time with no draw-cycle lockup.
  *      Events signal that an action occurred but never include plaintext amounts.
- *      After each deposit/withdraw, the current TWAB is pushed to `TicketEngine`
- *      (no-op sync while the engine is frozen for a draw — withdraw still succeeds).
+ *      After each deposit/withdraw, the encrypted balance is checkpointed in
+ *      `TicketEngine`; historical draw snapshots remain immutable without a freeze.
  *      Running encrypted TVL (`_totalDeposits`) is updated O(1) per deposit/withdraw
  *      and is publicly decryptable (same disclosure class as TicketEngine.totalTickets).
  */
@@ -48,7 +48,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     /// @notice Emitted when `account` withdraws. No amount is included.
     event Withdrawn(address indexed account);
 
-    /// @notice Emitted when the ticket engine address is set or rotated.
+    /// @notice Emitted when the ticket engine address is configured.
     event TicketEngineUpdated(address indexed ticketEngine);
 
     /// @notice Asset address cannot be the zero address.
@@ -56,6 +56,9 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
 
     /// @notice Ticket engine address cannot be the zero address.
     error InvalidTicketEngine();
+
+    /// @notice Ticket engine wiring is immutable once configured.
+    error TicketEngineAlreadyConfigured();
 
     /**
      * @param asset_ ERC-7984 confidential token used as the deposit asset (cUSDC).
@@ -69,12 +72,13 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Sets the TicketEngine that receives TWAB weight syncs after deposit/withdraw.
+     * @notice Configures the TicketEngine that receives balance checkpoints.
      * @param ticketEngine_ Non-zero TicketEngine address.
-     * @dev Only owner. Mirrors the zero-address constructor guard on `asset`.
+     * @dev Only owner and callable once.
      */
     function setTicketEngine(address ticketEngine_) external onlyOwner {
         if (ticketEngine_ == address(0)) revert InvalidTicketEngine();
+        if (address(ticketEngine) != address(0)) revert TicketEngineAlreadyConfigured();
         ticketEngine = TicketEngine(ticketEngine_);
         emit TicketEngineUpdated(ticketEngine_);
     }
@@ -143,8 +147,8 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
      * @dev Caller must have set this vault as an ERC-7984 operator on `asset`
      *      before calling. The input is verified against this vault (encrypt for
      *      `address(this)`), then pulled via the `euint64` transferFrom overload.
-     *      Balance and TWAB update homomorphically; no lockup. TWAB is synced to
-     *      TicketEngine last (no-op if unset or if the engine is frozen).
+     *      Balance and TWAB update homomorphically; no lockup. The resulting balance
+     *      is checkpointed in TicketEngine last.
      */
     function deposit(externalEuint64 encryptedAmount, bytes calldata inputProof) external nonReentrant {
         euint64 amount = FHE.fromExternal(encryptedAmount, inputProof);
@@ -166,8 +170,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
      * @param inputProof ZK proof authenticating `encryptedAmount`.
      * @dev Underflow-safe: if the requested amount exceeds balance, zero is transferred
      *      (via FHE select) rather than reverting, so win/loss-style leakage cannot
-     *      occur through transaction success alone. Withdrawal is never gated by draws —
-     *      TicketEngine freeze causes weight sync to lag, not a withdraw revert.
+     *      occur through transaction success alone. Withdrawal is never gated by draws.
      *      TVL is adjusted by `toWithdraw` only (encrypted zero on oversized no-op).
      */
     function withdraw(externalEuint64 encryptedAmount, bytes calldata inputProof) external nonReentrant {
@@ -199,8 +202,7 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Pushes `account`'s current TWAB to TicketEngine when wired.
-     *      Skips if the engine is unset or the TWAB handle is uninitialized.
+     * @dev Pushes `account`'s current balance to TicketEngine when wired.
      */
     function _syncTickets(address account) private {
         TicketEngine engine = ticketEngine;
@@ -208,13 +210,13 @@ contract ConfidentialVault is ZamaEthereumConfig, Ownable, ReentrancyGuard {
             return;
         }
 
-        euint64 twab = _twabs[account];
-        if (!FHE.isInitialized(twab)) {
+        euint64 balance = _balances[account];
+        if (!FHE.isInitialized(balance)) {
             return;
         }
 
-        FHE.allowTransient(twab, address(engine));
-        engine.syncWeightFromVault(account, twab);
+        FHE.allowTransient(balance, address(engine));
+        engine.syncBalanceFromVault(account, balance);
     }
 
     /**

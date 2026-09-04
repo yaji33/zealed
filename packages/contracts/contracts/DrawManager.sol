@@ -1,354 +1,387 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.27;
 
-import {FHE, ebool, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, ebool, euint64, euint128} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
-import {IERC7984} from "@openzeppelin/confidential-contracts/interfaces/IERC7984.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ConfidentialVault} from "./ConfidentialVault.sol";
+import {PrizePool} from "./PrizePool.sol";
 import {TicketEngine} from "./TicketEngine.sol";
 
 /**
  * @title DrawManager
- * @notice Pull-based confidential prize draws over TicketEngine's Fenwick ticket tree.
- * @dev Winner selection never loops over depositors. Each user calls `checkIfWon` for
- *      themselves: one O(log n) encrypted prefix-sum + one encrypted range comparison
- *      against the public random value `r`. Losing resolves to an encrypted zero via
- *      `FHE.select` (never a revert), so win/loss is not leaked through tx success.
- *
- *      Prize size is demo-scaled yield posted at commit: public TVL × elapsed /
- *      YIELD_DIVISOR. The committer funds that amount in cUSDC into this contract's
- *      pot; `claim` pays the winner (or encrypted zero for losers). Principal stays
- *      in ConfidentialVault and is never locked.
- *
- *      Randomness: commit to a future block, reveal with that block's hash bounded by
- *      the publicly decrypted total ticket count. The committer cannot know `r` at
- *      commit time; reveal rejects past/too-late blocks so the hash cannot be withheld
- *      or substituted.
+ * @notice Multi-tier pull-based draws using Zama-native encrypted randomness.
+ * @dev One encrypted random value is stored per bounded prize slot. Each account
+ *      checks only its immutable historical range; no function loops over depositors.
  */
 contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
-    /// @notice Minimum blocks between commit and the randomness source block (~1 min on Sepolia).
-    /// @dev Demo-scaled; production would use a larger gap. Separate from MIN_DRAW_INTERVAL.
-    uint256 public constant MIN_REVEAL_DELAY = 5;
+    uint64 public constant MIN_DRAW_INTERVAL = 20 minutes;
+    uint64 public constant CLAIM_WINDOW = 20 minutes;
+    uint128 private constant RANDOM_DOMAIN = uint128(1) << 64;
 
-    /// @notice Minimum wall-clock gap between successive commits (20 minutes, Sepolia demo scale).
-    /// @dev Production would use a longer cadence (e.g. daily). Enforced from the prior commit timestamp.
-    uint256 public constant MIN_DRAW_INTERVAL = 20 minutes;
+    struct Draw {
+        uint64 startVersion;
+        uint64 startTime;
+        uint64 endVersion;
+        uint64 endTime;
+        uint64 totalScore;
+        uint64 claimDeadline;
+        bool closed;
+        bool awarded;
+        bool reconciliationPrepared;
+        bool reconciled;
+    }
 
-    /// @notice blockhash is only available for the most recent 256 blocks.
-    uint256 public constant MAX_REVEAL_WINDOW = 256;
-
-    /// @notice Demo yield divisor: `prize = tvl * elapsed / YIELD_DIVISOR`.
-    /// @dev Calibrated so ~100 cUSDC × 20 minutes ≈ 1 cUSDC (~1% of TVL per interval).
-    ///      Not a real Aave APY — Sepolia cUSDC has no yield module; the keeper sponsors the pot.
-    uint256 public constant YIELD_DIVISOR = 120_000;
-
-    /// @notice Ticket tree used for on-demand range computation.
     TicketEngine public immutable ticketEngine;
-
-    /// @notice Vault whose public TVL seeds the yield formula at commit.
     ConfidentialVault public immutable vault;
+    PrizePool public immutable prizePool;
 
-    /// @notice Confidential deposit asset (cUSDC / ERC-7984) held in the prize pot.
-    IERC7984 public immutable asset;
-
-    /// @notice Current draw id (incremented on each commit).
     uint256 public drawId;
+    uint64 public periodStartVersion;
+    uint64 public periodStartTime;
 
-    /// @notice Public plaintext random draw value `r` for the current revealed draw.
-    uint64 public drawRandomValue;
+    mapping(uint256 id => Draw draw) public draws;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => euint64 random))) private _slotRandom;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => bool)))) public
+        hasChecked;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => bool)))) public
+        hasClaimed;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => ebool)))) private
+        _won;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => euint64)))) private
+        _pendingPrize;
+    mapping(uint256 id => mapping(address account => euint64)) private _rangeStart;
+    mapping(uint256 id => mapping(address account => euint64)) private _drawWeight;
+    mapping(uint256 id => mapping(address account => bool)) public rangePrepared;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => bool)))) public
+        winRevealed;
+    mapping(uint256 id => mapping(uint8 tier => mapping(uint8 slot => mapping(address account => bool)))) public
+        winRevealPrepared;
 
-    /// @notice Whether the current draw has been revealed (r finalized).
-    bool public revealed;
-
-    /// @notice Future block whose hash seeds `r`.
-    uint256 public revealBlock;
-
-    /// @notice Timestamp of the most recent `commitDraw` (0 before the first commit).
-    uint256 public lastCommitTimestamp;
-
-    /// @notice Plaintext total tickets used to bound `r` (set at reveal after public decrypt).
-    uint64 public totalTicketsPlain;
-
-    /// @notice Public prize size for the current draw (aggregate disclosure).
-    uint64 public prizeAmountPlain;
-
-    /// @notice Public prize per draw id (survives later commits for late claims).
-    mapping(uint256 draw => uint64 prize) public prizeOfDraw;
-
-    /// @notice Single prize tier for the current protocol (ship-if-time selective disclosure).
-    uint8 public constant TIER_MAIN = 1;
-
-    /// @dev Per-draw, per-user guard — one checkIfWon attempt each.
-    mapping(uint256 draw => mapping(address account => bool checked)) public hasChecked;
-
-    /// @notice Whether `account` has claimed the prize (or encrypted zero) for `draw`.
-    mapping(uint256 draw => mapping(address account => bool claimed)) public hasClaimed;
-
-    /// @notice Whether `account` has optionally published a win for `draw` (off by default).
-    mapping(uint256 draw => mapping(address account => bool revealed)) public winRevealed;
-
-    /// @dev Encrypted pending prize per user (ACL-gated to that user).
-    mapping(address account => euint64 prize) private _pendingPrize;
-
-    /// @dev Encrypted win flag from checkIfWon; publicly decryptable for optional revealWin.
-    mapping(uint256 draw => mapping(address account => ebool won)) private _won;
-
-    /// @notice Emitted when a draw is committed to a future randomness block.
-    event DrawCommitted(uint256 indexed drawId, uint256 revealBlock, uint64 prizeAmount);
-
-    /// @notice Emitted when `r` is finalized. No per-user data.
-    event DrawRevealed(uint256 indexed drawId, uint64 randomValue, uint64 totalTickets);
-
-    /// @notice Emitted when a user checks the current draw. No win/loss or amount.
-    event DrawChecked(uint256 indexed drawId, address indexed account);
-
-    /// @notice Emitted when a user claims (winner or silent zero). No amount.
-    event PrizeClaimed(uint256 indexed drawId, address indexed account);
-
-    /// @notice Optional selective disclosure: address won a tier. No prize amount.
-    event WinRevealed(uint256 indexed drawId, address indexed account, uint8 tier);
+    event DrawClosed(uint256 indexed drawId);
+    event DrawAwarded(uint256 indexed drawId);
+    event EmptyDrawCancelled(uint256 indexed drawId);
+    event PrizeChecked(uint256 indexed drawId, address indexed account, uint8 tier, uint8 slot);
+    event PrizeClaimed(uint256 indexed drawId, address indexed account, uint8 tier, uint8 slot);
+    event WinRevealPrepared(uint256 indexed drawId, address indexed account, uint8 tier, uint8 slot);
+    event WinRevealed(uint256 indexed drawId, address indexed account, uint8 tier, uint8 slot);
+    event DrawReconciliationStarted(uint256 indexed drawId);
+    event DrawReconciled(uint256 indexed drawId);
 
     error InvalidTicketEngine();
     error InvalidVault();
-    error DrawNotCommitted();
-    error DrawPendingReveal();
-    error DrawAlreadyRevealed();
-    error DrawNotRevealed();
-    error InvalidRevealBlock();
+    error InvalidPrizePool();
+    error AssetMismatch();
+    error VaultMismatch();
     error DrawIntervalNotElapsed();
-    error RevealTooEarly();
-    error RevealTooLate();
-    error ZeroTotalTickets();
-    error ZeroPrize();
-    error AlreadyChecked();
-    error WrongDrawId();
+    error DrawNotClosed();
+    error DrawAlreadyAwarded();
+    error DrawNotAwarded();
+    error DrawExpired();
+    error DrawNotExpired();
+    error DrawNotReconciled();
+    error ZeroTotalScore();
+    error InvalidDraw();
+    error InvalidTier();
+    error InvalidSlot();
     error NotRegistered();
+    error AlreadyChecked();
     error NotChecked();
     error AlreadyClaimed();
-    error AlreadyWinRevealed();
+    error AlreadyRevealed();
+    error RevealNotPrepared();
     error NotAWinner();
+    error ReconciliationNotPrepared();
 
     /**
-     * @param ticketEngine_ Deployed TicketEngine (Fenwick ticket weights).
-     * @param vault_ Deployed ConfidentialVault (public TVL source + asset).
+     * @param ticketEngine_ Versioned encrypted ticket engine.
+     * @param vault_ Confidential principal vault.
+     * @param prizePool_ Isolated prize-liquidity pool.
      */
-    constructor(address ticketEngine_, address vault_) {
+    constructor(address ticketEngine_, address vault_, address prizePool_) {
         if (ticketEngine_ == address(0)) revert InvalidTicketEngine();
         if (vault_ == address(0)) revert InvalidVault();
+        if (prizePool_ == address(0)) revert InvalidPrizePool();
         ticketEngine = TicketEngine(ticketEngine_);
         vault = ConfidentialVault(vault_);
-        asset = vault.asset();
+        prizePool = PrizePool(prizePool_);
+        if (ticketEngine.vault() != vault_) revert VaultMismatch();
+        if (address(prizePool.asset()) != address(vault.asset())) revert AssetMismatch();
+        periodStartVersion = ticketEngine.currentVersion();
+        periodStartTime = uint64(block.timestamp);
     }
 
     /**
-     * @notice Commit the next draw; prize is demo-scaled yield from public TVL × elapsed.
-     * @param revealBlock_ Block number whose hash will seed `r` (must be >= now + MIN_REVEAL_DELAY).
-     * @param tvlCleartext Public decryption of `vault.totalDeposits()`.
-     * @param tvlProof KMS self-relay proof for `tvlCleartext`.
-     * @dev Freezes TicketEngine weights. Pulls `prize` cUSDC from `msg.sender` into this
-     *      contract's pot (`setOperator` required). Anyone may call; the committer cannot
-     *      predict `blockhash(revealBlock_)`. First draw uses `MIN_DRAW_INTERVAL` as elapsed.
+     * @notice Closes the current accrual period and prepares its aggregate score.
+     * @return id Newly closed draw id.
+     * @return totalScoreHandle Publicly decryptable encrypted period score.
      */
-    function commitDraw(uint256 revealBlock_, uint64 tvlCleartext, bytes calldata tvlProof) external nonReentrant {
-        if (revealBlock_ < block.number + MIN_REVEAL_DELAY) revert InvalidRevealBlock();
+    function closeDraw() external nonReentrant returns (uint256 id, euint64 totalScoreHandle) {
+        if (drawId != 0 && !draws[drawId].reconciled) revert DrawNotReconciled();
+        uint64 nowTime = uint64(block.timestamp);
+        uint64 elapsed = nowTime - periodStartTime;
+        if (elapsed < MIN_DRAW_INTERVAL) revert DrawIntervalNotElapsed();
 
-        // Allow a new commit only from idle (no open commit) or after the prior draw revealed.
-        if (drawId != 0 && !revealed) revert DrawPendingReveal();
-
-        if (lastCommitTimestamp != 0 && block.timestamp < lastCommitTimestamp + MIN_DRAW_INTERVAL) {
-            revert DrawIntervalNotElapsed();
-        }
-
-        euint64 tvlHandle = vault.totalDeposits();
-        bytes32[] memory handles = new bytes32[](1);
-        handles[0] = euint64.unwrap(tvlHandle);
-        FHE.checkSignatures(handles, abi.encode(tvlCleartext), tvlProof);
-
-        uint256 elapsed = lastCommitTimestamp == 0
-            ? MIN_DRAW_INTERVAL
-            : block.timestamp - lastCommitTimestamp;
-        uint64 prize = uint64((uint256(tvlCleartext) * elapsed) / YIELD_DIVISOR);
-        if (prize == 0) revert ZeroPrize();
-
-        if (ticketEngine.frozen()) {
-            ticketEngine.setFrozen(false);
-        }
-
+        (uint64 endVersion, uint64 endTime) = ticketEngine.snapshot();
         unchecked {
-            drawId += 1;
+            id = ++drawId;
         }
-        revealed = false;
-        drawRandomValue = 0;
-        totalTicketsPlain = 0;
-        prizeAmountPlain = prize;
-        prizeOfDraw[drawId] = prize;
-        revealBlock = revealBlock_;
-        lastCommitTimestamp = block.timestamp;
+        draws[id] = Draw({
+            startVersion: periodStartVersion,
+            startTime: periodStartTime,
+            endVersion: endVersion,
+            endTime: endTime,
+            totalScore: 0,
+            claimDeadline: 0,
+            closed: true,
+            awarded: false,
+            reconciliationPrepared: false,
+            reconciled: false
+        });
 
-        euint64 prizeEnc = FHE.asEuint64(prize);
-        FHE.allowTransient(prizeEnc, address(asset));
-        asset.confidentialTransferFrom(msg.sender, address(this), prizeEnc);
-
-        ticketEngine.setFrozen(true);
-        ticketEngine.makeTotalPubliclyDecryptable();
-
-        emit DrawCommitted(drawId, revealBlock_, prize);
+        totalScoreHandle = ticketEngine.prepareTotalScore(
+            periodStartVersion,
+            periodStartTime,
+            endVersion,
+            endTime
+        );
+        emit DrawClosed(id);
     }
 
     /**
-     * @notice Reveal `r` from the committed blockhash, bounded by the publicly decrypted total.
-     * @param totalTicketsCleartext Public decryption of TicketEngine.totalTickets().
-     * @param decryptionProof KMS self-relay proof for `totalTicketsCleartext`.
-     * @dev Rejects early reveals and reveals after the 256-block hash window so the
-     *      randomness source cannot be predicted at commit or replaced after expiry.
+     * @notice Verifies the aggregate score, allocates liquidity, and generates FHE random slots.
+     * @param id Closed draw id.
+     * @param totalScore Public aggregate balance-time score.
+     * @param proof KMS public-decryption proof for the prepared score.
      */
-    function revealDraw(uint64 totalTicketsCleartext, bytes calldata decryptionProof) external nonReentrant {
-        if (drawId == 0) revert DrawNotCommitted();
-        if (revealed) revert DrawAlreadyRevealed();
-        if (block.number <= revealBlock) revert RevealTooEarly();
-        if (block.number > revealBlock + MAX_REVEAL_WINDOW) revert RevealTooLate();
-        if (totalTicketsCleartext == 0) revert ZeroTotalTickets();
+    function awardDraw(uint256 id, uint64 totalScore, bytes calldata proof) external nonReentrant {
+        Draw storage draw = draws[id];
+        if (id == 0 || id != drawId || !draw.closed) revert DrawNotClosed();
+        if (draw.awarded) revert DrawAlreadyAwarded();
+        if (totalScore == 0) revert ZeroTotalScore();
 
-        euint64 totalHandle = ticketEngine.totalTickets();
-        bytes32[] memory handles = new bytes32[](1);
-        handles[0] = euint64.unwrap(totalHandle);
-        FHE.checkSignatures(handles, abi.encode(totalTicketsCleartext), decryptionProof);
+        ticketEngine.verifyPreparedTotal(totalScore, proof);
+        uint64 deadline = uint64(block.timestamp) + CLAIM_WINDOW;
+        prizePool.allocateDraw(id, deadline);
 
-        bytes32 h = blockhash(revealBlock);
-        if (h == bytes32(0)) revert RevealTooLate();
+        for (uint8 tier = 0; tier < prizePool.TIER_COUNT(); ++tier) {
+            uint8 slots = prizePool.slotCount(tier);
+            for (uint8 slot = 0; slot < slots; ++slot) {
+                euint64 random = FHE.randEuint64();
+                FHE.allowThis(random);
+                _slotRandom[id][tier][slot] = random;
+            }
+        }
 
-        uint64 r = uint64(uint256(h) % uint256(totalTicketsCleartext));
-
-        totalTicketsPlain = totalTicketsCleartext;
-        drawRandomValue = r;
-        revealed = true;
-
-        emit DrawRevealed(drawId, r, totalTicketsCleartext);
+        draw.totalScore = totalScore;
+        draw.claimDeadline = deadline;
+        draw.awarded = true;
+        periodStartVersion = draw.endVersion;
+        periodStartTime = draw.endTime;
+        emit DrawAwarded(id);
     }
 
     /**
-     * @notice Pull-based win check for `msg.sender` on draw `_drawId`.
-     * @param _drawId Draw to check (must be the current revealed draw).
-     * @dev Computes `[start, start+weight)` via TicketEngine prefix sum, then one
-     *      encrypted comparison against plaintext `r`. Losers receive encrypted zero
-     *      (no revert). `hasChecked` prevents repeat calls per draw.
+     * @notice Cancels a closed draw whose verified aggregate score is zero.
+     * @param id Closed draw id.
+     * @param proof KMS public-decryption proof for a zero score.
      */
-    function checkIfWon(uint256 _drawId) external nonReentrant {
-        if (_drawId == 0 || _drawId != drawId) revert WrongDrawId();
-        if (!revealed) revert DrawNotRevealed();
-        if (hasChecked[_drawId][msg.sender]) revert AlreadyChecked();
+    function cancelEmptyDraw(uint256 id, bytes calldata proof) external {
+        Draw storage draw = draws[id];
+        if (id == 0 || id != drawId || !draw.closed) revert DrawNotClosed();
+        if (draw.awarded) revert DrawAlreadyAwarded();
+        ticketEngine.verifyPreparedTotal(0, proof);
+        draw.reconciled = true;
+        emit EmptyDrawCancelled(id);
+    }
+
+    /**
+     * @notice Checks the caller against one tier prize slot.
+     * @param id Awarded draw id.
+     * @param tier Tier index.
+     * @param slot Prize slot index.
+     */
+    function checkPrize(uint256 id, uint8 tier, uint8 slot) external nonReentrant {
+        Draw storage draw = draws[id];
+        _validateOpenSlot(draw, id, tier, slot);
+        if (hasChecked[id][tier][slot][msg.sender]) revert AlreadyChecked();
 
         uint256 index = ticketEngine.indexOf(msg.sender);
         if (index == 0) revert NotRegistered();
+        hasChecked[id][tier][slot][msg.sender] = true;
 
-        hasChecked[_drawId][msg.sender] = true;
+        (euint64 start, euint64 weight) = _loadRange(draw, id, index);
+        ebool won = _computeWin(draw.totalScore, id, tier, slot, start, weight);
+        FHE.allowThis(won);
+        _won[id][tier][slot][msg.sender] = won;
 
-        euint64 start = ticketEngine.prefixSumBefore(index);
-        euint64 weight = ticketEngine.weightOf(index);
-        euint64 end = FHE.add(start, weight);
-        FHE.allowThis(end);
+        uint64 amount = prizePool.prizePerSlot(id, tier);
+        euint64 pending = FHE.select(won, FHE.asEuint64(amount), FHE.asEuint64(0));
+        FHE.allowThis(pending);
+        FHE.allow(pending, msg.sender);
+        _pendingPrize[id][tier][slot][msg.sender] = pending;
 
-        euint64 rEnc = FHE.asEuint64(drawRandomValue);
-        ebool inRange = FHE.and(FHE.ge(rEnc, start), FHE.lt(rEnc, end));
-        FHE.allowThis(inRange);
-        // Publicly decryptable so a winner can optionally prove the flag via self-relay
-        // without revealing their encrypted prize amount.
-        ebool wonFlag = FHE.makePubliclyDecryptable(inRange);
-        _won[_drawId][msg.sender] = wonFlag;
-
-        euint64 prize = FHE.select(wonFlag, FHE.asEuint64(prizeOfDraw[_drawId]), FHE.asEuint64(0));
-        FHE.allowThis(prize);
-        FHE.allow(prize, msg.sender);
-        _pendingPrize[msg.sender] = prize;
-
-        emit DrawChecked(_drawId, msg.sender);
+        emit PrizeChecked(id, msg.sender, tier, slot);
     }
 
     /**
-     * @notice Pays the caller's prize for `drawId_` from the pot (encrypted zero if they lost).
-     * @param drawId_ Draw previously checked via `checkIfWon`.
-     * @dev Does not revert on a loss — silent encrypted zero, same shape as oversized withdraw.
-     *      Marks claimed even on zero so the pot cannot be replayed. No amount in the event.
+     * @notice Transfers a checked prize or encrypted zero to the caller.
+     * @param id Awarded draw id.
+     * @param tier Tier index.
+     * @param slot Prize slot index.
      */
-    function claim(uint256 drawId_) external nonReentrant {
-        if (drawId_ == 0) revert WrongDrawId();
-        if (!hasChecked[drawId_][msg.sender]) revert NotChecked();
-        if (hasClaimed[drawId_][msg.sender]) revert AlreadyClaimed();
+    function claim(uint256 id, uint8 tier, uint8 slot) external nonReentrant {
+        Draw storage draw = draws[id];
+        _validateOpenSlot(draw, id, tier, slot);
+        if (!hasChecked[id][tier][slot][msg.sender]) revert NotChecked();
+        if (hasClaimed[id][tier][slot][msg.sender]) revert AlreadyClaimed();
+        hasClaimed[id][tier][slot][msg.sender] = true;
 
-        hasClaimed[drawId_][msg.sender] = true;
-
-        ebool wonFlag = _won[drawId_][msg.sender];
-        euint64 pay = FHE.select(wonFlag, FHE.asEuint64(prizeOfDraw[drawId_]), FHE.asEuint64(0));
-        FHE.allowThis(pay);
-        FHE.allowTransient(pay, address(asset));
-        asset.confidentialTransfer(msg.sender, pay);
-
-        emit PrizeClaimed(drawId_, msg.sender);
+        ebool won = _won[id][tier][slot][msg.sender];
+        FHE.allowTransient(won, address(prizePool));
+        prizePool.payout(id, msg.sender, tier, slot, won);
+        emit PrizeClaimed(id, msg.sender, tier, slot);
     }
 
     /**
-     * @notice Optionally publish that `msg.sender` won tier `TIER_MAIN` for `_drawId`.
-     * @param _drawId Draw previously checked via `checkIfWon`.
-     * @param wonCleartext Public decryption of the caller's encrypted win flag (must be true).
-     * @param decryptionProof KMS self-relay proof for `wonCleartext`.
-     * @dev Off by default — callers opt in. Verifies the stored `ebool` via `checkSignatures`
-     *      so losers (or unchecked addresses) cannot falsely claim a win. Emits tier only;
-     *      never the prize amount. Safe for past draws as long as `hasChecked` was set.
+     * @notice Returns a caller's encrypted pending prize for one slot.
      */
-    function revealWin(uint256 _drawId, bool wonCleartext, bytes calldata decryptionProof) external nonReentrant {
-        if (_drawId == 0) revert WrongDrawId();
-        if (!hasChecked[_drawId][msg.sender]) revert NotChecked();
-        if (winRevealed[_drawId][msg.sender]) revert AlreadyWinRevealed();
+    function getPendingPrize(uint256 id, uint8 tier, uint8 slot) external view returns (euint64) {
+        return _pendingPrize[id][tier][slot][msg.sender];
+    }
+
+    /**
+     * @notice Returns an account's encrypted pending prize handle.
+     */
+    function getPendingPrizeOf(
+        uint256 id,
+        uint8 tier,
+        uint8 slot,
+        address account
+    ) external view returns (euint64) {
+        return _pendingPrize[id][tier][slot][account];
+    }
+
+    /**
+     * @notice Returns the caller's encrypted score for a prepared draw range.
+     */
+    function getDrawWeight(uint256 id) external view returns (euint64) {
+        return _drawWeight[id][msg.sender];
+    }
+
+    /**
+     * @notice Opts a checked result into public decryption for selective disclosure.
+     */
+    function prepareWinReveal(uint256 id, uint8 tier, uint8 slot) external nonReentrant {
+        if (!hasChecked[id][tier][slot][msg.sender]) revert NotChecked();
+        if (winRevealPrepared[id][tier][slot][msg.sender]) revert AlreadyRevealed();
+        ebool publicWon = FHE.makePubliclyDecryptable(_won[id][tier][slot][msg.sender]);
+        _won[id][tier][slot][msg.sender] = publicWon;
+        winRevealPrepared[id][tier][slot][msg.sender] = true;
+        emit WinRevealPrepared(id, msg.sender, tier, slot);
+    }
+
+    /**
+     * @notice Publishes a prepared, verified tier-slot win without an amount.
+     */
+    function revealWin(
+        uint256 id,
+        uint8 tier,
+        uint8 slot,
+        bool wonCleartext,
+        bytes calldata proof
+    ) external nonReentrant {
+        if (!hasChecked[id][tier][slot][msg.sender]) revert NotChecked();
+        if (winRevealed[id][tier][slot][msg.sender]) revert AlreadyRevealed();
+        if (!winRevealPrepared[id][tier][slot][msg.sender]) revert RevealNotPrepared();
         if (!wonCleartext) revert NotAWinner();
-
-        ebool flag = _won[_drawId][msg.sender];
-        if (!FHE.isInitialized(flag)) revert NotChecked();
-
+        ebool won = _won[id][tier][slot][msg.sender];
         bytes32[] memory handles = new bytes32[](1);
-        handles[0] = ebool.unwrap(flag);
-        FHE.checkSignatures(handles, abi.encode(wonCleartext), decryptionProof);
-
-        winRevealed[_drawId][msg.sender] = true;
-        emit WinRevealed(_drawId, msg.sender, TIER_MAIN);
+        handles[0] = ebool.unwrap(won);
+        FHE.checkSignatures(handles, abi.encode(wonCleartext), proof);
+        winRevealed[id][tier][slot][msg.sender] = true;
+        emit WinRevealed(id, msg.sender, tier, slot);
     }
 
     /**
-     * @notice Returns the caller's encrypted pending prize handle for client-side user-decrypt.
+     * @notice Returns a prepared encrypted win flag.
      */
-    function getPendingPrize() external view returns (euint64) {
-        return _pendingPrize[msg.sender];
+    function getWonFlag(uint256 id, uint8 tier, uint8 slot, address account) external view returns (ebool) {
+        return _won[id][tier][slot][account];
     }
 
     /**
-     * @notice Returns `account`'s encrypted pending prize handle.
-     * @param account User to query.
+     * @notice Prepares the expired prize pool balance for aggregate reconciliation.
      */
-    function getPendingPrizeOf(address account) external view returns (euint64) {
-        return _pendingPrize[account];
+    function prepareReconciliation(uint256 id) external nonReentrant returns (euint64 handle) {
+        Draw storage draw = draws[id];
+        if (!draw.awarded || block.timestamp <= draw.claimDeadline) revert DrawNotExpired();
+        if (draw.reconciled) revert DrawNotReconciled();
+        handle = prizePool.prepareReconciliation();
+        draw.reconciliationPrepared = true;
+        emit DrawReconciliationStarted(id);
     }
 
     /**
-     * @notice Encrypted win flag for `account` on `draw` (publicly decryptable after checkIfWon).
-     * @param draw Draw id.
-     * @param account User who called `checkIfWon`.
+     * @notice Finalizes expiry rollover using the actual prize-pool token balance.
      */
-    function getWonFlag(uint256 draw, address account) external view returns (ebool) {
-        return _won[draw][account];
+    function finalizeReconciliation(
+        uint256 id,
+        uint64 clearBalance,
+        bytes calldata proof
+    ) external nonReentrant {
+        Draw storage draw = draws[id];
+        if (!draw.reconciliationPrepared) revert ReconciliationNotPrepared();
+        prizePool.finalizeReconciliation(clearBalance, proof);
+        draw.reconciled = true;
+        emit DrawReconciled(id);
     }
 
-    /**
-     * @notice Re-opens TicketEngine weight syncs after the current draw has been revealed.
-     * @dev Kept separate from `revealDraw` on purpose: `checkIfWon` reads live Fenwick weights,
-     *      so unfreezing immediately after reveal would let a user inflate their range against
-     *      an already-finalized `r`. Call this (permissionless) after the claim window, or let
-     *      the next `commitDraw` unfreeze-then-refreeze.
-     */
-    function unfreezeWeights() external {
-        if (!revealed) revert DrawNotRevealed();
-        if (ticketEngine.frozen()) {
-            ticketEngine.setFrozen(false);
+    function _validateOpenSlot(Draw storage draw, uint256 id, uint8 tier, uint8 slot) private view {
+        if (id == 0 || !draw.awarded) revert DrawNotAwarded();
+        if (block.timestamp > draw.claimDeadline) revert DrawExpired();
+        if (tier >= prizePool.TIER_COUNT()) revert InvalidTier();
+        if (slot >= prizePool.slotCount(tier)) revert InvalidSlot();
+    }
+
+    function _loadRange(
+        Draw storage draw,
+        uint256 id,
+        uint256 index
+    ) private returns (euint64 start, euint64 weight) {
+        if (rangePrepared[id][msg.sender]) {
+            return (_rangeStart[id][msg.sender], _drawWeight[id][msg.sender]);
         }
+        (start, weight) = ticketEngine.rangeForDraw(
+            index,
+            draw.startVersion,
+            draw.startTime,
+            draw.endVersion,
+            draw.endTime
+        );
+        FHE.allowThis(start);
+        FHE.allowThis(weight);
+        FHE.allow(start, msg.sender);
+        FHE.allow(weight, msg.sender);
+        _rangeStart[id][msg.sender] = start;
+        _drawWeight[id][msg.sender] = weight;
+        rangePrepared[id][msg.sender] = true;
+        return (start, weight);
+    }
+
+    function _computeWin(
+        uint64 totalScore,
+        uint256 id,
+        uint8 tier,
+        uint8 slot,
+        euint64 start,
+        euint64 weight
+    ) private returns (ebool) {
+        euint64 end = FHE.add(start, weight);
+        euint128 point = FHE.mul(FHE.asEuint128(_slotRandom[id][tier][slot]), uint128(totalScore));
+        euint128 lower = FHE.mul(FHE.asEuint128(start), RANDOM_DOMAIN);
+        euint128 upper = FHE.mul(FHE.asEuint128(end), RANDOM_DOMAIN);
+        return FHE.and(FHE.ge(point, lower), FHE.lt(point, upper));
     }
 }

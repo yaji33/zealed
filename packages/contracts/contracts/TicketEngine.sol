@@ -1,71 +1,58 @@
 // SPDX-License-Identifier: BSD-3-Clause-Clear
 pragma solidity ^0.8.27;
 
-import {FHE, euint64, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
+import {FHE, euint64} from "@fhevm/solidity/lib/FHE.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title TicketEngine
- * @notice Fenwick tree (binary indexed tree) over encrypted per-user ticket weights.
- * @dev Each depositor gets a permanent 1-based index on first sync; slots are never reused.
- *      Cumulative ticket starts are not stored — DrawManager computes them on demand via
- *      `prefixSumBefore`. Weight updates touch O(log n) tree nodes with encrypted addition
- *      / subtraction only (no encrypted comparisons on the update path).
- *
- *      Vault wiring: `ConfidentialVault` calls `syncWeightFromVault` after deposit /
- *      withdraw with ACL granted on the TWAB handle. While frozen for a draw,
- *      `syncWeightFromVault` no-ops (vault withdraw must never revert); self-service
- *      `syncWeight` still reverts. Accounts may also self-sync via `syncWeight` when
- *      unfrozen (tests use this path).
+ * @notice Versioned Fenwick tree for encrypted draw-period balance integrals.
+ * @dev A user's integral is represented as `intercept + balance * timestamp`.
+ *      Each balance change checkpoints affected tree nodes under one version.
+ *      Draws compare two immutable versions, so withdrawals never require a
+ *      freeze and never change an already closed draw.
  */
-contract TicketEngine is ZamaEthereumConfig, ReentrancyGuard {
-    /// @notice Maximum permanent depositor slots (Fenwick indices `1..MAX_DEPOSITORS`).
-    /// @dev Caps update/query walks at O(log MAX) so a single sync stays under the HCU tx limit.
-    uint256 public constant MAX_DEPOSITORS = type(uint16).max; // 65535
+contract TicketEngine is ZamaEthereumConfig, Ownable, ReentrancyGuard {
+    uint256 public constant MAX_DEPOSITORS = 1 << 16;
 
-    /// @notice Vault authorized to push TWAB-derived weights as `euint64` handles.
+    struct Checkpoint {
+        uint64 version;
+        euint64 slope;
+        euint64 intercept;
+    }
+
     address public vault;
-
-    /// @notice Draw manager authorized to freeze weights for a draw and read tree queries.
     address public drawManager;
+    uint256 public nextIndex = 1;
+    uint64 public currentVersion;
+    uint64 public immutable genesisTimestamp;
 
-    /// @notice Next Fenwick index to assign (1-based; 0 means "unregistered").
-    uint256 public nextIndex;
-
-    /// @notice When true, weight syncs revert so the draw sees a stable ticket space.
-    bool public frozen;
-
-    /// @notice Permanent Fenwick slot per depositor. Never reused or reassigned.
     mapping(address account => uint256 index) public indexOf;
+    mapping(uint256 index => euint64 balance) private _balances;
+    mapping(uint256 index => euint64 intercept) private _intercepts;
+    mapping(uint256 index => euint64 slope) private _treeSlope;
+    mapping(uint256 index => euint64 intercept) private _treeIntercept;
+    mapping(uint256 index => Checkpoint[]) private _nodeHistory;
+    mapping(uint256 index => Checkpoint[]) private _leafHistory;
 
-    /// @dev Leaf ticket weight at each Fenwick index (not a tree node).
-    mapping(uint256 index => euint64 weight) private _weights;
+    euint64 private _preparedTotal;
 
-    /// @dev Fenwick tree nodes. Index 0 unused; totals tracked in `_totalTickets`.
-    mapping(uint256 index => euint64 node) private _tree;
-
-    /// @dev Encrypted sum of all leaf weights (publicly decryptable aggregate at draw time).
-    euint64 private _totalTickets;
-
-    /// @notice Emitted when an account is assigned its permanent Fenwick index.
     event IndexAssigned(address indexed account, uint256 indexed index);
-
-    /// @notice Emitted when an account's ticket weight is synced. No amounts included.
     event WeightSynced(address indexed account, uint256 indexed index);
-
-    /// @notice Emitted when the tree is frozen or unfrozen for a draw.
-    event FreezeSet(bool frozen);
+    event VaultConfigured(address indexed vault);
+    event DrawManagerConfigured(address indexed drawManager);
 
     error InvalidVault();
     error InvalidDrawManager();
     error NotVault();
     error NotDrawManager();
-    error NotAuthorized();
-    error WeightsFrozen();
     error InvalidIndex();
     error ZeroAddress();
     error MaxDepositorsReached();
+    error AlreadyConfigured();
+    error InvalidSnapshot();
 
     modifier onlyVault() {
         if (msg.sender != vault) revert NotVault();
@@ -77,164 +64,44 @@ contract TicketEngine is ZamaEthereumConfig, ReentrancyGuard {
         _;
     }
 
-    modifier whenNotFrozen() {
-        if (frozen) revert WeightsFrozen();
-        _;
-    }
-
     /**
-     * @param vault_ Address authorized to call `syncWeightFromVault` (ConfidentialVault).
-     * @dev `vault_` may be zero at deploy if the vault is wired later via `setVault`.
+     * @param vault_ Initial vault. May be zero when contracts are deployed in stages.
      */
-    constructor(address vault_) {
+    constructor(address vault_) Ownable(msg.sender) {
         vault = vault_;
-        nextIndex = 1;
-        _totalTickets = FHE.asEuint64(0);
-        FHE.allowThis(_totalTickets);
+        genesisTimestamp = uint64(block.timestamp);
     }
 
     /**
-     * @notice Sets the vault authorized to push TWAB-derived weights.
-     * @param vault_ ConfidentialVault address (non-zero).
-     * @dev Callable once while unset, or by the current vault to rotate.
+     * @notice Configures the vault once.
+     * @param vault_ ConfidentialVault address.
      */
-    function setVault(address vault_) external {
+    function setVault(address vault_) external onlyOwner {
         if (vault_ == address(0)) revert InvalidVault();
-        if (vault != address(0) && msg.sender != vault) revert NotVault();
+        if (vault != address(0)) revert AlreadyConfigured();
         vault = vault_;
+        emit VaultConfigured(vault_);
     }
 
     /**
-     * @notice Sets the DrawManager authorized to freeze weights and consume tree queries.
-     * @param drawManager_ DrawManager address (non-zero).
-     * @dev Callable once while unset, or by the current draw manager to rotate.
+     * @notice Configures the draw manager once.
+     * @param drawManager_ DrawManager address.
      */
-    function setDrawManager(address drawManager_) external {
+    function setDrawManager(address drawManager_) external onlyOwner {
         if (drawManager_ == address(0)) revert InvalidDrawManager();
-        if (drawManager != address(0) && msg.sender != drawManager) revert NotDrawManager();
+        if (drawManager != address(0)) revert AlreadyConfigured();
         drawManager = drawManager_;
+        emit DrawManagerConfigured(drawManager_);
     }
 
     /**
-     * @notice Freeze or unfreeze weight updates for the active draw window.
-     * @param frozen_ True to freeze syncs; false to reopen updates.
+     * @notice Checkpoints an account's new encrypted balance.
+     * @param account Depositor whose balance changed.
+     * @param newBalance New absolute vault balance.
      */
-    function setFrozen(bool frozen_) external onlyDrawManager {
-        frozen = frozen_;
-        emit FreezeSet(frozen_);
-    }
-
-    /**
-     * @notice Sync `account`'s ticket weight from an encrypted input (self-service / tests).
-     * @param account Depositor whose weight is updated.
-     * @param encryptedWeight New absolute ticket weight (`externalEuint64`).
-     * @param inputProof ZK proof authenticating `encryptedWeight`.
-     * @dev Caller must be `account` or `vault`. Assigns a permanent index on first sync.
-     *      Encrypt for `address(this)`.
-     */
-    function syncWeight(
-        address account,
-        externalEuint64 encryptedWeight,
-        bytes calldata inputProof
-    ) external nonReentrant whenNotFrozen {
+    function syncBalanceFromVault(address account, euint64 newBalance) external nonReentrant onlyVault {
         if (account == address(0)) revert ZeroAddress();
-        if (msg.sender != account && msg.sender != vault) revert NotAuthorized();
 
-        euint64 newWeight = FHE.fromExternal(encryptedWeight, inputProof);
-        _syncWeight(account, newWeight);
-    }
-
-    /**
-     * @notice Sync `account`'s ticket weight from a vault-held encrypted TWAB handle.
-     * @param account Depositor whose weight is updated.
-     * @param newWeight Absolute ticket weight (typically the account's current TWAB).
-     * @dev Only `vault`. Vault must `FHE.allowTransient(newWeight, ticketEngine)` before calling.
-     *      When `frozen`, this is a no-op (does not revert) so `ConfidentialVault.withdraw`
-     *      never fails during an active draw — principal has no lockup. Self-service
-     *      `syncWeight` still reverts while frozen. Weight catches up on the next vault
-     *      sync after the freeze lifts.
-     */
-    function syncWeightFromVault(address account, euint64 newWeight) external nonReentrant onlyVault {
-        if (account == address(0)) revert ZeroAddress();
-        if (frozen) {
-            return;
-        }
-        _syncWeight(account, newWeight);
-    }
-
-    /**
-     * @notice View accessor for the encrypted leaf weight at Fenwick `index`.
-     * @param index Permanent 1-based depositor index.
-     */
-    function getWeight(uint256 index) external view returns (euint64) {
-        if (index == 0 || index >= nextIndex) revert InvalidIndex();
-        return _weights[index];
-    }
-
-    /**
-     * @notice Returns the encrypted leaf weight at Fenwick `index` with transient ACL for the caller.
-     * @param index Permanent 1-based depositor index.
-     * @dev Used by DrawManager during `checkIfWon`.
-     */
-    function weightOf(uint256 index) external returns (euint64 weight) {
-        if (index == 0 || index >= nextIndex) revert InvalidIndex();
-        weight = _weights[index];
-        if (!FHE.isInitialized(weight)) {
-            weight = FHE.asEuint64(0);
-        }
-        FHE.allowThis(weight);
-        FHE.allowTransient(weight, msg.sender);
-    }
-
-    /**
-     * @notice Encrypted prefix sum of leaf weights in `[1, index]` (inclusive).
-     * @param index Fenwick index to sum through (1-based).
-     * @dev O(log n) encrypted additions. Grants transient ACL to the caller.
-     */
-    function prefixSum(uint256 index) external returns (euint64 sum) {
-        if (index == 0 || index >= nextIndex) revert InvalidIndex();
-        sum = _prefixSum(index);
-        FHE.allowThis(sum);
-        FHE.allowTransient(sum, msg.sender);
-    }
-
-    /**
-     * @notice Encrypted cumulative start for the depositor at `index`: sum of `[1, index)`.
-     * @param index Permanent 1-based depositor index.
-     * @dev Used by `DrawManager.checkIfWon` so starts are never stored. Index 1 → zero.
-     *      Grants transient ACL to the caller.
-     */
-    function prefixSumBefore(uint256 index) external returns (euint64 sum) {
-        if (index == 0 || index >= nextIndex) revert InvalidIndex();
-        if (index == 1) {
-            sum = FHE.asEuint64(0);
-        } else {
-            sum = _prefixSum(index - 1);
-        }
-        FHE.allowThis(sum);
-        FHE.allowTransient(sum, msg.sender);
-    }
-
-    /**
-     * @notice Encrypted total ticket count (tree root / running leaf sum).
-     * @dev Aggregate only — safe to publicly decrypt at draw time (same class as TVL).
-     */
-    function totalTickets() external view returns (euint64) {
-        return _totalTickets;
-    }
-
-    /**
-     * @notice Marks the total ticket count as publicly decryptable for the draw reveal path.
-     * @dev Only DrawManager. Does not decrypt on-chain; client self-relays and submits proof.
-     */
-    function makeTotalPubliclyDecryptable() external onlyDrawManager {
-        _totalTickets = FHE.makePubliclyDecryptable(_totalTickets);
-    }
-
-    /**
-     * @dev Assigns index if needed, replaces leaf weight, and applies Fenwick delta.
-     */
-    function _syncWeight(address account, euint64 newWeight) private {
         uint256 index = indexOf[account];
         if (index == 0) {
             if (nextIndex > MAX_DEPOSITORS) revert MaxDepositorsReached();
@@ -246,71 +113,201 @@ contract TicketEngine is ZamaEthereumConfig, ReentrancyGuard {
             emit IndexAssigned(account, index);
         }
 
-        euint64 oldWeight = _weights[index];
-        bool hadOld = FHE.isInitialized(oldWeight);
-
-        // Apply +newWeight then -oldWeight (skip remove on first sync). Encrypted add/sub only.
-        _fenwickAdd(index, newWeight);
-        if (hadOld) {
-            _fenwickSub(index, oldWeight);
-            euint64 total = FHE.add(FHE.sub(_totalTickets, oldWeight), newWeight);
-            FHE.allowThis(total);
-            _totalTickets = total;
-        } else {
-            euint64 total = FHE.add(_totalTickets, newWeight);
-            FHE.allowThis(total);
-            _totalTickets = total;
+        uint64 version;
+        unchecked {
+            version = ++currentVersion;
         }
 
-        FHE.allowThis(newWeight);
-        FHE.allow(newWeight, account);
-        _weights[index] = newWeight;
+        euint64 oldBalance = _initialized(_balances[index]);
+        euint64 oldIntercept = _initialized(_intercepts[index]);
+        euint64 cumulativeNow = FHE.add(oldIntercept, FHE.mul(oldBalance, uint64(block.timestamp)));
+        euint64 newIntercept = FHE.sub(cumulativeNow, FHE.mul(newBalance, uint64(block.timestamp)));
+        euint64 slopeDelta = FHE.sub(newBalance, oldBalance);
+        euint64 interceptDelta = FHE.sub(newIntercept, oldIntercept);
+
+        FHE.allowThis(newBalance);
+        FHE.allow(newBalance, account);
+        FHE.allowThis(newIntercept);
+        _balances[index] = newBalance;
+        _intercepts[index] = newIntercept;
+        _leafHistory[index].push(Checkpoint(version, newBalance, newIntercept));
+
+        uint256 i = index;
+        while (i <= MAX_DEPOSITORS) {
+            euint64 slope = FHE.add(_initialized(_treeSlope[i]), slopeDelta);
+            euint64 intercept = FHE.add(_initialized(_treeIntercept[i]), interceptDelta);
+            FHE.allowThis(slope);
+            FHE.allowThis(intercept);
+            _treeSlope[i] = slope;
+            _treeIntercept[i] = intercept;
+            _nodeHistory[i].push(Checkpoint(version, slope, intercept));
+            unchecked {
+                i += i & (~i + 1);
+            }
+        }
 
         emit WeightSynced(account, index);
     }
 
     /**
-     * @dev Inclusive prefix sum over `[1, index]` via classic Fenwick interrogation.
+     * @notice Returns the current encrypted vault balance at an index.
+     * @param index Permanent depositor index.
      */
-    function _prefixSum(uint256 index) private returns (euint64 sum) {
+    function getWeight(uint256 index) external view returns (euint64) {
+        if (index == 0 || index >= nextIndex) revert InvalidIndex();
+        return _balances[index];
+    }
+
+    /**
+     * @notice Returns the current immutable snapshot cursor.
+     */
+    function snapshot() external view onlyDrawManager returns (uint64 version, uint64 timestamp) {
+        return (currentVersion, uint64(block.timestamp));
+    }
+
+    /**
+     * @notice Makes a draw-period aggregate score available for public decryption.
+     * @param startVersion Version at period start.
+     * @param startTime Timestamp at period start.
+     * @param endVersion Version at period end.
+     * @param endTime Timestamp at period end.
+     * @return handle Publicly decryptable encrypted total score.
+     */
+    function prepareTotalScore(
+        uint64 startVersion,
+        uint64 startTime,
+        uint64 endVersion,
+        uint64 endTime
+    ) external onlyDrawManager returns (euint64 handle) {
+        _validateSnapshot(startVersion, startTime, endVersion, endTime);
+        euint64 endCumulative = _prefixCumulativeAt(MAX_DEPOSITORS, endVersion, endTime);
+        euint64 startCumulative = _prefixCumulativeAt(MAX_DEPOSITORS, startVersion, startTime);
+        handle = FHE.sub(endCumulative, startCumulative);
+        FHE.allowThis(handle);
+        _preparedTotal = FHE.makePubliclyDecryptable(handle);
+        return _preparedTotal;
+    }
+
+    /**
+     * @notice Verifies the most recently prepared aggregate score.
+     * @param cleartext Claimed aggregate draw-period score.
+     * @param proof KMS public-decryption proof.
+     */
+    function verifyPreparedTotal(uint64 cleartext, bytes calldata proof) external onlyDrawManager {
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = euint64.unwrap(_preparedTotal);
+        FHE.checkSignatures(handles, abi.encode(cleartext), proof);
+    }
+
+    /**
+     * @notice Returns the aggregate handle prepared by the latest draw close.
+     */
+    function preparedTotal() external view returns (euint64) {
+        return _preparedTotal;
+    }
+
+    /**
+     * @notice Computes a caller-independent encrypted ticket range for one draw.
+     * @param index Permanent depositor index.
+     * @param startVersion Version at period start.
+     * @param startTime Timestamp at period start.
+     * @param endVersion Version at period end.
+     * @param endTime Timestamp at period end.
+     * @return start Encrypted cumulative score before this depositor.
+     * @return weight Encrypted score held by this depositor during the period.
+     */
+    function rangeForDraw(
+        uint256 index,
+        uint64 startVersion,
+        uint64 startTime,
+        uint64 endVersion,
+        uint64 endTime
+    ) external onlyDrawManager returns (euint64 start, euint64 weight) {
+        if (index == 0 || index >= nextIndex) revert InvalidIndex();
+        _validateSnapshot(startVersion, startTime, endVersion, endTime);
+
+        if (index == 1) {
+            start = FHE.asEuint64(0);
+        } else {
+            euint64 prefixEnd = _prefixCumulativeAt(index - 1, endVersion, endTime);
+            euint64 prefixStart = _prefixCumulativeAt(index - 1, startVersion, startTime);
+            start = FHE.sub(prefixEnd, prefixStart);
+        }
+
+        Checkpoint memory endLeaf = _checkpointAt(_leafHistory[index], endVersion);
+        Checkpoint memory startLeaf = _checkpointAt(_leafHistory[index], startVersion);
+        euint64 endValue = _evaluate(endLeaf, endTime);
+        euint64 startValue = _evaluate(startLeaf, startTime);
+        weight = FHE.sub(endValue, startValue);
+
+        FHE.allowThis(start);
+        FHE.allowThis(weight);
+        FHE.allowTransient(start, msg.sender);
+        FHE.allowTransient(weight, msg.sender);
+    }
+
+    function _prefixCumulativeAt(
+        uint256 index,
+        uint64 version,
+        uint64 timestamp
+    ) private returns (euint64 sum) {
         sum = FHE.asEuint64(0);
         uint256 i = index;
         while (i > 0) {
-            sum = FHE.add(sum, _tree[i]);
+            Checkpoint memory point = _checkpointAt(_nodeHistory[i], version);
+            sum = FHE.add(sum, _evaluate(point, timestamp));
             unchecked {
-                i -= i & (~i + 1); // i -= lsb(i)
+                i -= i & (~i + 1);
             }
         }
         FHE.allowThis(sum);
     }
 
-    /**
-     * @dev Adds `delta` into Fenwick nodes covering `index` (O(log MAX_DEPOSITORS)).
-     */
-    function _fenwickAdd(uint256 index, euint64 delta) private {
-        uint256 i = index;
-        while (i <= MAX_DEPOSITORS) {
-            euint64 updated = FHE.add(_tree[i], delta);
-            FHE.allowThis(updated);
-            _tree[i] = updated;
-            unchecked {
-                i += i & (~i + 1); // i += lsb(i)
+    function _checkpointAt(
+        Checkpoint[] storage history,
+        uint64 version
+    ) private view returns (Checkpoint memory point) {
+        uint256 length = history.length;
+        if (length == 0 || history[0].version > version) {
+            return Checkpoint(0, euint64.wrap(bytes32(0)), euint64.wrap(bytes32(0)));
+        }
+
+        uint256 low;
+        uint256 high = length;
+        while (low < high) {
+            uint256 mid = (low + high) >> 1;
+            if (history[mid].version <= version) {
+                low = mid + 1;
+            } else {
+                high = mid;
             }
         }
+        return history[low - 1];
     }
 
-    /**
-     * @dev Subtracts `delta` from Fenwick nodes covering `index` (O(log MAX_DEPOSITORS)).
-     */
-    function _fenwickSub(uint256 index, euint64 delta) private {
-        uint256 i = index;
-        while (i <= MAX_DEPOSITORS) {
-            euint64 updated = FHE.sub(_tree[i], delta);
-            FHE.allowThis(updated);
-            _tree[i] = updated;
-            unchecked {
-                i += i & (~i + 1);
-            }
+    function _evaluate(Checkpoint memory point, uint64 timestamp) private returns (euint64) {
+        euint64 slope = _initialized(point.slope);
+        euint64 intercept = _initialized(point.intercept);
+        return FHE.add(intercept, FHE.mul(slope, timestamp));
+    }
+
+    function _initialized(euint64 value) private returns (euint64) {
+        return FHE.isInitialized(value) ? value : FHE.asEuint64(0);
+    }
+
+    function _validateSnapshot(
+        uint64 startVersion,
+        uint64 startTime,
+        uint64 endVersion,
+        uint64 endTime
+    ) private view {
+        if (
+            startVersion > endVersion ||
+            endVersion > currentVersion ||
+            startTime < genesisTimestamp ||
+            startTime >= endTime
+        ) {
+            revert InvalidSnapshot();
         }
     }
 }

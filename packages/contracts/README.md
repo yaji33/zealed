@@ -3,7 +3,7 @@
 Hardhat and fhEVM contracts for Zealed.
 
 Status: the curated multi-vault, multi-tier contracts are deployed and verified on Sepolia. The live registry contains
-isolated cUSDCMock and cUSDTMock systems; see `../../docs/deployment.md`.
+isolated cUSDC, cUSDT, cWETH, cZAMA, cXAUt, and cBRON systems; see `../../docs/deployment.md`.
 
 ## Target contract boundaries
 

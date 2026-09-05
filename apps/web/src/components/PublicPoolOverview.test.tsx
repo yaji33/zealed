@@ -71,8 +71,11 @@ describe("PublicPoolOverview", () => {
     ).toBeVisible();
     expect(screen.getByRole("heading", { name: "Reserve" })).toBeVisible();
     expect(screen.getByText(/Grand · 1 slot/)).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: "Open cUSDC faucet" }),
-    ).toHaveAttribute("href", "/dashboard/faucet");
+    expect(screen.getByRole("link", { name: "Open cUSDC faucet" })).toHaveAttribute(
+      "href",
+      "/dashboard/faucet",
+    );
+    expect(screen.queryByText("START HERE")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Mint test cUSDC, then save/i })).toBeVisible();
   });
 });

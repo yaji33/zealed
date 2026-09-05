@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import LockIcon from "@mui/icons-material/Lock";
+import LockOpenIcon from "@mui/icons-material/LockOpen";
+import SouthWestIcon from "@mui/icons-material/SouthWest";
+import NorthEastIcon from "@mui/icons-material/NorthEast";
+import VerifiedIcon from "@mui/icons-material/Verified";
 import {
   useAccount,
   usePublicClient,
@@ -8,6 +13,7 @@ import {
   useWriteContract,
 } from "wagmi";
 import type { Hex } from "viem";
+import { AppIcon } from "@/components/AppIcon";
 import { ExplorerTxLink } from "@/components/ExplorerTxLink";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useFhevm } from "@/lib/fhe";
@@ -210,8 +216,7 @@ export function PrivatePositionCard() {
         Your private position
       </h2>
       <p className={`${ledeClass} mt-2`}>
-        Balance, time-weighted balance, and ticket weight require your EIP-712
-        signature.
+        Your wallet decrypts this. Nobody else can.
       </p>
       <div className={statGridClass}>
         {[
@@ -241,6 +246,10 @@ export function PrivatePositionCard() {
         disabled={!configured || Boolean(busy) || balance !== null}
         onClick={() => void decryptPosition()}
       >
+        <AppIcon
+          icon={balance !== null ? LockOpenIcon : LockIcon}
+          size={16}
+        />
         {busy === "Decrypting position…"
           ? "Decrypting…"
           : balance !== null
@@ -262,15 +271,17 @@ export function PrivatePositionCard() {
               aria-pressed={mode === item}
               onClick={() => setMode(item)}
             >
+              <AppIcon
+                icon={item === "deposit" ? SouthWestIcon : NorthEastIcon}
+                size={16}
+              />
               {item === "deposit" ? "Deposit" : "Withdraw"}
             </button>
           ))}
         </div>
         {mode === "deposit" && !isOperator ? (
           <>
-            <p className={ledeClass}>
-              Approve the vault as an operator before your first deposit.
-            </p>
+            <p className={ledeClass}>Approve the vault before your first deposit.</p>
             <button
               type="button"
               className={`${btnSecondaryClass} mt-3`}
@@ -279,6 +290,7 @@ export function PrivatePositionCard() {
               }
               onClick={() => void approveVault()}
             >
+              <AppIcon icon={VerifiedIcon} size={16} />
               {busy === "Approving vault…" ? "Approving…" : "Approve vault"}
             </button>
           </>
@@ -287,7 +299,7 @@ export function PrivatePositionCard() {
             <p className={ledeClass}>
               {mode === "deposit"
                 ? "The amount is encrypted before submission."
-                : "Withdraw any time, including while a draw is open or settling."}
+                : "Withdraw any time. Draws cannot block it."}
             </p>
             <label className={`${fieldClass} mt-4`}>
               <span>Amount ({assetLabel})</span>
@@ -304,6 +316,10 @@ export function PrivatePositionCard() {
               disabled={!configured || Boolean(busy)}
               onClick={() => void submitAmount()}
             >
+              <AppIcon
+                icon={mode === "deposit" ? SouthWestIcon : NorthEastIcon}
+                size={16}
+              />
               {busy ??
                 (mode === "deposit"
                   ? "Deposit privately"

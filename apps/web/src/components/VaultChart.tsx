@@ -95,9 +95,7 @@ export function VaultChart() {
           <DrawClock />
         </div>
         <p className={`${ledeClass} mt-2 max-w-2xl`}>
-          Principal history uses only vault deposits. Prize figures show only
-          current sponsor-funded mock-yield accounting and are never plotted on
-          the principal scale.
+          Principal history never includes prize liquidity.
         </p>
       </div>
 

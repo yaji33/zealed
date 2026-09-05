@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
+import LockOpenIcon from "@mui/icons-material/LockOpen";
+import SearchIcon from "@mui/icons-material/Search";
 import {
   useAccount,
   usePublicClient,
@@ -8,6 +11,7 @@ import {
   useWriteContract,
 } from "wagmi";
 import type { Hex } from "viem";
+import { AppIcon } from "@/components/AppIcon";
 import { DrawCyclePanel } from "@/components/DrawCyclePanel";
 import { ExplorerTxLink } from "@/components/ExplorerTxLink";
 import { PrivateOddsPanel } from "@/components/PrivateOddsPanel";
@@ -47,8 +51,7 @@ export function PrizeBoard() {
         Private prize board
       </h2>
       <p className={`${ledeClass} mt-2 max-w-2xl`}>
-        Check one bounded slot at a time. The contract records an encrypted
-        result, then your wallet decrypts it locally before a claim.
+        Check one slot. Decrypt locally. Claim if you won.
       </p>
       <div className="mt-6 rounded-lg border border-edge bg-surface p-5">
         <DrawCyclePanel />
@@ -248,6 +251,7 @@ function PrizeSlotCard({
           disabled={Boolean(busy)}
           onClick={() => void check()}
         >
+          <AppIcon icon={SearchIcon} size={16} />
           {busy ?? "Check slot"}
         </button>
       ) : prize === null ? (
@@ -257,6 +261,7 @@ function PrizeSlotCard({
           disabled={Boolean(busy)}
           onClick={() => void decrypt()}
         >
+          <AppIcon icon={LockOpenIcon} size={16} />
           {busy ?? "Decrypt result"}
         </button>
       ) : prize > 0n && !claimed ? (
@@ -266,6 +271,7 @@ function PrizeSlotCard({
           disabled={Boolean(busy)}
           onClick={() => void claim()}
         >
+          <AppIcon icon={EmojiEventsIcon} size={16} />
           {busy ?? "Claim prize"}
         </button>
       ) : null}

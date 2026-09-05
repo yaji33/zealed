@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import WaterDropIcon from "@mui/icons-material/WaterDrop";
+import { AppIcon } from "@/components/AppIcon";
+import { HeroBanner } from "@/components/HeroBanner";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { usePrizePoolData } from "@/hooks/usePrizePoolData";
 import { useVaultTvl } from "@/hooks/useVaultTvl";
+import { FAUCET_PATH } from "@/lib/vaultPath";
 import { formatCompactAmount } from "@/lib/format";
+import { wrapperDecimalsFor } from "@/lib/wrapperMeta";
 import {
   bannerWarnClass,
   btnClass,
@@ -23,14 +28,18 @@ function Amount({
   value,
   loading,
   unit,
+  decimals,
 }: {
   value?: bigint;
   loading?: boolean;
   unit: string;
+  decimals: number;
 }) {
   return (
     <p className={statValueClass}>
-      {loading || value === undefined ? "…" : formatCompactAmount(value)}
+      {loading || value === undefined
+        ? "…"
+        : formatCompactAmount(value, decimals)}
       {value !== undefined ? (
         <span className={statUnitClass}>{unit}</span>
       ) : null}
@@ -43,34 +52,23 @@ export function PublicPoolOverview() {
   const pool = usePrizePoolData();
   const { selected } = useVaultDirectory();
   const assetLabel = selected?.label ?? "token";
+  const decimals = wrapperDecimalsFor(selected?.asset);
   const hasBuiltInFaucet = Boolean(selected);
 
   return (
     <>
       {hasBuiltInFaucet ? (
-        <section className={`${cardClass} border-mint/30 bg-mint/[0.04]`}>
-          <p className="m-0 font-mono text-[0.68rem] tracking-[0.18em] text-mint">
-            START HERE
-          </p>
-          <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-            <div>
-              <h1 className="m-0 font-dm-sans text-[clamp(1.6rem,4vw,2.35rem)] font-medium tracking-tight text-ink">
-                Get test {assetLabel}, then save privately
-              </h1>
-              <p className={`${ledeClass} mt-2 max-w-2xl`}>
-                The faucet mints the selected wrapper&apos;s public test asset
-                and wraps it confidentially. Your principal remains withdrawable
-                at any time.
-              </p>
-            </div>
-            <Link
-              className={`${btnClass} shrink-0 text-center`}
-              href="/dashboard/faucet"
-            >
+        <HeroBanner
+          icon={<AppIcon icon={WaterDropIcon} size={22} />}
+          headline={`Mint test ${assetLabel}, then save.`}
+          line="Principal stays withdrawable."
+          cta={
+            <Link className={btnClass} href={FAUCET_PATH}>
+              <AppIcon icon={WaterDropIcon} size={16} />
               Open {assetLabel} faucet
             </Link>
-          </div>
-        </section>
+          }
+        />
       ) : null}
 
       <section className={cardClass} aria-labelledby="public-pool-title">
@@ -78,8 +76,7 @@ export function PublicPoolOverview() {
           Public pool accounting
         </h2>
         <p className={`${ledeClass} mt-2`}>
-          Principal and sponsor-funded mock yield are separate. These figures
-          are aggregate and do not reveal any saver&apos;s position.
+          Principal and sponsor-funded mock yield stay separate.
         </p>
 
         <div className={statGridClass}>
@@ -89,10 +86,9 @@ export function PublicPoolOverview() {
               value={tvl.data}
               loading={tvl.isLoading}
               unit={assetLabel}
+              decimals={decimals}
             />
-            <p className={statNoteClass}>
-              Saver principal held by the vault; never prize funding.
-            </p>
+            <p className={statNoteClass}>Saver principal. Never prize funding.</p>
           </article>
           <article className={statCardClass}>
             <h3 className={statLabelClass}>Available prize liquidity</h3>
@@ -100,10 +96,9 @@ export function PublicPoolOverview() {
               value={pool.data?.availableLiquidity}
               loading={pool.isLoading}
               unit={assetLabel}
+              decimals={decimals}
             />
-            <p className={statNoteClass}>
-              Unallocated sponsor-funded mock yield.
-            </p>
+            <p className={statNoteClass}>Unallocated sponsor-funded mock yield.</p>
           </article>
           <article className={statCardClass}>
             <h3 className={statLabelClass}>Reserve</h3>
@@ -111,10 +106,9 @@ export function PublicPoolOverview() {
               value={pool.data?.reserveLiquidity}
               loading={pool.isLoading}
               unit={assetLabel}
+              decimals={decimals}
             />
-            <p className={statNoteClass}>
-              Prize-liquidity backstop, separate from principal.
-            </p>
+            <p className={statNoteClass}>Prize-liquidity backstop.</p>
           </article>
         </div>
 
@@ -141,10 +135,14 @@ export function PublicPoolOverview() {
                   <p className={statLabelClass}>
                     {tier.name} · {tier.slots} slot{tier.slots === 1 ? "" : "s"}
                   </p>
-                  <Amount value={tier.allocation} unit={assetLabel} />
+                  <Amount
+                    value={tier.allocation}
+                    unit={assetLabel}
+                    decimals={decimals}
+                  />
                   <p className={statNoteClass}>
-                    {formatCompactAmount(tier.prizePerSlot)} {assetLabel} per
-                    slot
+                    {formatCompactAmount(tier.prizePerSlot, decimals)} {assetLabel}{" "}
+                    per slot
                   </p>
                 </article>
               ))}

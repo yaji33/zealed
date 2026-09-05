@@ -1,5 +1,8 @@
 "use client";
 
+import VisibilityIcon from "@mui/icons-material/Visibility";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import { AppIcon } from "@/components/AppIcon";
 import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
 
 const ROWS = [
@@ -24,15 +27,15 @@ const ROWS = [
 function CellMarker({ kind }: { kind: "public" | "sealed" }) {
   if (kind === "public") {
     return (
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-public/20 text-[0.65rem] font-bold text-public">
-        +
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-public/20 text-public">
+        <AppIcon icon={VisibilityIcon} size={16} />
       </span>
     );
   }
 
   return (
-    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/20 text-[0.65rem] font-bold text-ember">
-      #
+    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ember/20 text-ember">
+      <AppIcon icon={VisibilityOffIcon} size={16} />
     </span>
   );
 }
@@ -47,8 +50,7 @@ export function VisibleVsSealedSection() {
         Visible vs sealed
       </h2>
       <p className="mb-10 max-w-[44rem] text-muted">
-        The pool is auditable. Your position is not. Everything needed to verify fairness is public,
-        and everything about you stays encrypted.
+        The pool is auditable. Your position is not.
       </p>
 
       <div className="overflow-hidden rounded-2xl">

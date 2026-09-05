@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import LockOpenIcon from "@mui/icons-material/LockOpen";
 import type { Hex } from "viem";
 import { useAccount, usePublicClient, useReadContract } from "wagmi";
+import { AppIcon } from "@/components/AppIcon";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { usePrizePoolData } from "@/hooks/usePrizePoolData";
 import { drawManagerAbi } from "@/lib/abi/zealed";
@@ -83,8 +85,7 @@ export function PrivateOddsPanel({ drawId }: { drawId: bigint }) {
   if (!prepared) {
     return (
       <p className={bannerClass}>
-        Check any prize slot to prepare your encrypted draw weight and private
-        odds.
+        Check any prize slot to prepare your encrypted draw weight.
       </p>
     );
   }
@@ -103,8 +104,7 @@ export function PrivateOddsPanel({ drawId }: { drawId: bigint }) {
             Your private odds
           </h3>
           <p className="mb-0 mt-1 text-sm text-muted">
-            Your draw weight stays encrypted until you authorize local
-            decryption.
+            Decrypt locally to see your odds.
           </p>
         </div>
         {weight === null ? (
@@ -114,6 +114,7 @@ export function PrivateOddsPanel({ drawId }: { drawId: bigint }) {
             disabled={busy}
             onClick={() => void decryptOdds()}
           >
+            <AppIcon icon={LockOpenIcon} size={16} />
             {busy ? "Decrypting…" : "Decrypt odds"}
           </button>
         ) : null}

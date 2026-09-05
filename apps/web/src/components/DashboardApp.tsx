@@ -1,13 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
+import { useEffect } from "react";
 import { useAccount } from "wagmi";
 import { WalletGate } from "@/components/WalletGate";
 import { NetworkGuard } from "@/components/NetworkGuard";
 import { PublicPoolOverview } from "@/components/PublicPoolOverview";
 import { VaultSelector } from "@/components/VaultSelector";
+import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
-import { cardClass } from "@/lib/uiClasses";
+import { bannerWarnClass, btnSecondaryClass, cardClass } from "@/lib/uiClasses";
+import { VAULTS_PATH } from "@/lib/vaultPath";
 
 function AppPanel({ message }: { message: string }) {
   return (
@@ -40,9 +44,29 @@ const VaultChart = dynamic(
   },
 );
 
-export function DashboardApp() {
+export function DashboardApp({ slug }: { slug: string }) {
   const { isConnected } = useAccount();
   const { ready } = useConnectWallet();
+  const { systems, selected, selectVault, isLoading } = useVaultDirectory();
+  const match = systems.find(
+    (system) => system.active && system.slug === slug.toLowerCase(),
+  );
+
+  useEffect(() => {
+    if (!match) return;
+    if (selected?.id !== match.id) selectVault(match.id);
+  }, [match, selectVault, selected?.id]);
+
+  if (!isLoading && systems.length > 0 && !match) {
+    return (
+      <section className={cardClass}>
+        <p className={bannerWarnClass}>That vault is not in the live registry.</p>
+        <Link className={`${btnSecondaryClass} mt-4`} href={VAULTS_PATH}>
+          Back to vaults
+        </Link>
+      </section>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

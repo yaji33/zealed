@@ -22,13 +22,11 @@ type Status = { kind: "idle" | "ok" | "err" | "cancel"; text: string };
 
 const PHASE_COPY = {
   loading: "Loading draw state…",
-  open: "Savings continue to accrue eligibility until this period closes.",
-  "ready-to-close": "The interval has ended. Anyone can close the draw.",
-  "awaiting-award":
-    "The snapshot is sealed and awaiting its public aggregate proof.",
-  claiming: "Awarded slots can be checked and claimed before the deadline.",
-  reconciliation:
-    "The claim window ended. Unused liquidity is being reconciled.",
+  open: "Eligibility is accruing.",
+  "ready-to-close": "Interval ended. Anyone can close.",
+  "awaiting-award": "Snapshot sealed. Award pending.",
+  claiming: "Check and claim before the deadline.",
+  reconciliation: "Unused liquidity is being returned.",
 } as const;
 
 export function DrawClock({ align = "end" }: { align?: "start" | "end" }) {
@@ -130,8 +128,7 @@ export function DrawCyclePanel() {
       ) : null}
       {cycle.phase === "awaiting-award" ? (
         <p className={bannerClass}>
-          Awarding requires the aggregate score proof; no user position is
-          decrypted.
+          Awarding uses an aggregate proof. No user position is decrypted.
         </p>
       ) : null}
       {status.kind !== "idle" ? (

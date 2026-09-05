@@ -16,9 +16,7 @@ export function NetworkGuard({ children }: { children: ReactNode }) {
   return (
     <section className={bannerWarnClass} role="alert">
       <h2 className="m-0 font-dm-sans text-lg font-medium text-ink">Switch to Sepolia</h2>
-      <p className="mb-4 mt-2">
-        Zealed transactions are configured for Ethereum Sepolia. Switch networks before continuing.
-      </p>
+      <p className="mb-4 mt-2">Transactions run on Ethereum Sepolia.</p>
       <button
         type="button"
         className={btnClass}

@@ -14,9 +14,12 @@ import { hexToString, isAddress, type Address, type Hex } from "viem";
 import { usePublicClient } from "wagmi";
 import { vaultRegistryAbi } from "@/lib/abi/vaultRegistry";
 import { addresses } from "@/lib/addresses";
+import { slugFromVaultId } from "@/lib/vaultPath";
+import { metaForAsset, metaForSlug } from "@/lib/wrapperMeta";
 
 export type VaultSystem = {
   id: Hex;
+  slug: string;
   label: string;
   asset: Address;
   vault: Address;
@@ -55,9 +58,11 @@ function fallbackSystem(): VaultSystem | undefined {
   ) {
     return undefined;
   }
+  const slug = "cusdc";
   return {
     id: "0x6375736463000000000000000000000000000000000000000000000000000000",
-    label: "cUSDC",
+    slug,
+    label: metaForAsset(addresses.asset)?.shortLabel ?? "cUSDC",
     asset: addresses.asset,
     vault: addresses.vault,
     ticketEngine: addresses.ticketEngine,
@@ -67,10 +72,17 @@ function fallbackSystem(): VaultSystem | undefined {
   };
 }
 
-function labelFor(id: Hex): string {
+function labelFor(id: Hex, asset: Address): string {
+  const fromAsset = metaForAsset(asset)?.shortLabel;
+  if (fromAsset) return fromAsset;
+  const slug = slugFromVaultId(id);
+  const fromSlug = metaForSlug(slug)?.shortLabel;
+  if (fromSlug) return fromSlug;
   try {
     const label = hexToString(id, { size: 32 }).replaceAll("\0", "");
-    if (/^cusd[ct]$/i.test(label)) return `c${label.slice(1).toUpperCase()}`;
+    if (/^c[a-z0-9]+$/i.test(label) && label.length > 1) {
+      return `c${label.slice(1).toUpperCase()}`;
+    }
     return label || "Vault";
   } catch {
     return "Vault";
@@ -117,7 +129,8 @@ export function VaultDirectoryProvider({ children }: { children: ReactNode }) {
       );
       return systems.map((system, index) => ({
         id: ids[index],
-        label: labelFor(ids[index]),
+        slug: slugFromVaultId(ids[index]),
+        label: labelFor(ids[index], system.asset),
         asset: system.asset,
         vault: system.vault,
         ticketEngine: system.ticketEngine,

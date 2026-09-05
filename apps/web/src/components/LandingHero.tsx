@@ -3,11 +3,15 @@
 import { motion, useReducedMotion } from "framer-motion";
 import Link from "next/link";
 import { useEffect } from "react";
+import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
 import { AsciiPoolField } from "@/components/AsciiPoolField";
+import { AppIcon } from "@/components/AppIcon";
 import { AnchorLink } from "@/components/motion/AnchorLink";
+import { LandingStatsBanner } from "@/components/LandingStatsBanner";
 import { LaunchAppLink } from "@/components/LaunchAppLink";
 import { prefetchApp } from "@/lib/prefetchApp";
 import { revealEase } from "@/lib/motionPresets";
+import { VAULTS_PATH } from "@/lib/vaultPath";
 
 export function LandingHero() {
   const reduceMotion = useReducedMotion();
@@ -33,6 +37,10 @@ export function LandingHero() {
           Zealed
         </Link>
         <nav aria-label="Primary" className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
+          <LaunchAppLink href={VAULTS_PATH} className="inline-flex items-center gap-1.5 text-ink">
+            <AppIcon icon={AccountBalanceIcon} size={16} />
+            Vaults
+          </LaunchAppLink>
           <AnchorLink href="#how-it-works" className="text-ink">
             How it works
           </AnchorLink>
@@ -58,19 +66,19 @@ export function LandingHero() {
           variants={headlineVariants}
           className="font-dm-sans text-[clamp(2.6rem,6.5vw,4.6rem)] font-medium leading-[1.08] tracking-tight text-ink"
         >
-          Save together.
-          <br />
-          Win in{" "}
-          <em className="font-fraunces italic font-normal text-ember">private</em>.
+          Save. Win{" "}
+          <em className="font-fraunces italic font-normal text-ember">privately</em>.
         </motion.h1>
         <motion.p
           custom={1}
           variants={headlineVariants}
-          className="mt-6 max-w-[30rem] text-[1.02rem] text-ink/90"
+          className="mt-5 max-w-[28rem] text-[1.02rem] text-ink/90"
         >
-          Deposit into a shared pool. Yield funds the prize. Your balance stays encrypted, and only
-          you can see if you won.
+          Deposits stay encrypted. Prizes come from a separate sponsor pool.
         </motion.p>
+        <motion.div custom={2} variants={headlineVariants} className="mt-2 w-full">
+          <LandingStatsBanner />
+        </motion.div>
       </motion.div>
 
       <motion.div

@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CurrencyExchangeIcon from "@mui/icons-material/CurrencyExchange";
+import VerifiedIcon from "@mui/icons-material/Verified";
+import WaterDropIcon from "@mui/icons-material/WaterDrop";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAccount,
@@ -8,6 +12,7 @@ import {
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
+import { AppIcon } from "@/components/AppIcon";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useWrappedAsset, wrappedAssetQueryKey } from "@/hooks/useWrappedAsset";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
@@ -338,10 +343,7 @@ export function CusdcFaucetCard() {
   return (
     <section className={cardClass}>
       <h2 className={sectionTitleClass}>Get {confidentialLabel}</h2>
-      <p className={`${ledeClass} mt-2`}>
-        Mint test {underlyingLabel} and wrap it into {confidentialLabel}, so you
-        can deposit.
-      </p>
+      <p className={`${ledeClass} mt-2`}>Mint, wrap, deposit.</p>
 
       {!configured && (
         <p className={bannerWarnClass}>
@@ -357,7 +359,7 @@ export function CusdcFaucetCard() {
             state={mintState}
             connectNext={approveState !== "locked" || mintState === "complete"}
           >
-            <p>Public mint on the selected Zama Sepolia mock asset.</p>
+            <p>Public mint on the selected Zama Sepolia mock.</p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Balance:{" "}
               {underlyingBalance === undefined
@@ -372,6 +374,7 @@ export function CusdcFaucetCard() {
               disabled={working || !configured}
               onClick={() => void onMint()}
             >
+              <AppIcon icon={WaterDropIcon} size={16} />
               {labelFor(
                 "mint",
                 mintState === "complete"
@@ -396,7 +399,7 @@ export function CusdcFaucetCard() {
             <p>
               {approveState === "locked"
                 ? "Unlocks after you mint."
-                : `Allow the wrapper to pull the ${underlyingLabel} you minted.`}
+                : `Allow the wrapper to pull ${underlyingLabel}.`}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Status:{" "}
@@ -417,6 +420,7 @@ export function CusdcFaucetCard() {
               }
               onClick={() => void onApprove()}
             >
+              <AppIcon icon={approvedEnough ? CheckCircleIcon : VerifiedIcon} size={16} />
               {approvedEnough
                 ? "Approved"
                 : labelFor("approve", "Approve wrapper")}
@@ -435,7 +439,7 @@ export function CusdcFaucetCard() {
                 ? "Unlocks after you mint."
                 : wrapState === "complete"
                   ? `Ready when you mint more ${underlyingLabel}.`
-                  : `Convert approved ${underlyingLabel} into ${confidentialLabel}.`}
+                  : `Wrap ${underlyingLabel} into ${confidentialLabel}.`}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
               Status: {hasWrapped ? "Wrapped" : "Not wrapped yet"}
@@ -464,6 +468,7 @@ export function CusdcFaucetCard() {
               }
               onClick={() => void onWrap()}
             >
+              <AppIcon icon={CurrencyExchangeIcon} size={16} />
               {labelFor(
                 "wrap",
                 hasWrapped ? "Wrap more" : `Wrap to ${confidentialLabel}`,
@@ -488,7 +493,7 @@ export function CusdcFaucetCard() {
               </>
             )}
           </p>
-          <p className={statNoteClass}>Lifetime wrap for this wallet.</p>
+          <p className={statNoteClass}>Wrapped on this wallet.</p>
         </aside>
       </div>
 

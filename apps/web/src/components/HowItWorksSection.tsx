@@ -1,35 +1,45 @@
 "use client";
 
+import SavingsIcon from "@mui/icons-material/Savings";
+import EmojiEventsIcon from "@mui/icons-material/EmojiEvents";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import LockOpenIcon from "@mui/icons-material/LockOpen";
+import type { SvgIconComponent } from "@mui/icons-material";
+import { AppIcon } from "@/components/AppIcon";
 import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
 import { StaggerGrid, StaggerItem } from "@/components/motion/StaggerGrid";
-import { StepPixelArt } from "@/components/StepPixelArt";
 
-const STEPS = [
+const STEPS: {
+  number: string;
+  title: string;
+  body: string;
+  icon: SvgIconComponent;
+}[] = [
   {
     number: "01",
     title: "Deposit",
     body: "Your amount is encrypted before it reaches the contract.",
-    visual: "deposit" as const,
+    icon: SavingsIcon,
   },
   {
     number: "02",
-    title: "Sponsor funds prizes",
+    title: "Prizes",
     body: "Mock yield enters PrizePool only. Principal never funds a tier.",
-    visual: "yield" as const,
+    icon: EmojiEventsIcon,
   },
   {
     number: "03",
-    title: "Multi-tier draw",
-    body: "Each bounded slot stores encrypted FHE randomness; you check your own range.",
-    visual: "draw" as const,
+    title: "Draw",
+    body: "Each slot stores encrypted FHE randomness. You check your own range.",
+    icon: AutoAwesomeIcon,
   },
   {
     number: "04",
     title: "Claim or withdraw",
-    body: "Decrypt a slot result locally, claim privately, or withdraw anytime.",
-    visual: "claim" as const,
+    body: "Decrypt locally, claim privately, or withdraw anytime.",
+    icon: LockOpenIcon,
   },
-] as const;
+];
 
 export function HowItWorksSection() {
   return (
@@ -54,11 +64,9 @@ export function HowItWorksSection() {
             <span className="relative mb-5 font-mono text-[0.72rem] tracking-widest text-ember/75">
               {step.number}
             </span>
-
-            <div className="relative">
-              <StepPixelArt type={step.visual} />
-            </div>
-
+            <span className="relative mb-5 grid h-12 w-12 place-items-center rounded-lg bg-mint/15 text-mint">
+              <AppIcon icon={step.icon} size={26} />
+            </span>
             <h3 className="relative mb-3 font-fraunces text-[1.35rem] font-medium leading-snug text-ink">
               {step.title}
             </h3>

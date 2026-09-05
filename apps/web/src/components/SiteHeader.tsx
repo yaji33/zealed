@@ -3,34 +3,58 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
+import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
+import WaterDropIcon from "@mui/icons-material/WaterDrop";
 import { useAccount } from "wagmi";
+import { AppIcon } from "@/components/AppIcon";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
+import { FAUCET_PATH, VAULTS_PATH } from "@/lib/vaultPath";
 
 const btnMint =
-  "cursor-pointer appearance-none rounded bg-mint px-[1.15rem] py-[0.55rem] font-medium text-void disabled:cursor-not-allowed disabled:opacity-45";
+  "inline-flex cursor-pointer appearance-none items-center justify-center gap-2 rounded bg-mint px-[1.15rem] py-[0.55rem] font-medium text-void disabled:cursor-not-allowed disabled:opacity-45";
 
 const btnWallet =
-  "cursor-pointer appearance-none rounded bg-mint/15 px-[1.15rem] py-[0.55rem] font-mono text-[0.85rem] font-medium text-ink disabled:cursor-not-allowed disabled:opacity-45";
+  "inline-flex cursor-pointer appearance-none items-center justify-center gap-2 rounded bg-mint/15 px-[1.15rem] py-[0.55rem] font-mono text-[0.85rem] font-medium text-ink disabled:cursor-not-allowed disabled:opacity-45";
+
+function navLinkClass(active: boolean): string {
+  return `inline-flex items-center gap-1.5 text-ink ${active ? "text-mint" : "hover:text-mint"}`;
+}
 
 export function SiteHeader() {
   const pathname = usePathname();
   const { address, isConnected } = useAccount();
-  const { connectWallet, disconnectWallet, canConnect, isPending, error } = useConnectWallet();
-  const faucetActive = pathname === "/dashboard/faucet" || pathname.startsWith("/dashboard/faucet/");
+  const { connectWallet, disconnectWallet, canConnect, isPending, error } =
+    useConnectWallet();
+  const faucetActive =
+    pathname === FAUCET_PATH || pathname.startsWith(`${FAUCET_PATH}/`);
+  const vaultsActive = pathname === VAULTS_PATH || pathname.startsWith(`${VAULTS_PATH}/`);
 
   return (
     <header className="sticky top-0 z-50 border-b border-line/30 bg-base/70 backdrop-blur-md">
-      <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-2 px-4 py-5 font-dm-sans max-[760px]:px-4">
+      <div className="mx-auto flex w-full max-w-[1160px] flex-col gap-2 px-4 py-5 font-dm-sans max-[760px]:px-4">
         <div className="flex items-center justify-between">
-          <Link href="/dashboard" className="text-2xl font-bold tracking-tight text-ink">
+          <Link href={VAULTS_PATH} className="text-2xl font-bold tracking-tight text-ink">
             Zealed
           </Link>
-          <nav aria-label="Primary" className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
+          <nav
+            aria-label="Primary"
+            className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4"
+          >
             <Link
-              href="/dashboard/faucet"
-              className="text-ink"
+              href={VAULTS_PATH}
+              className={navLinkClass(vaultsActive && !faucetActive)}
+              aria-current={vaultsActive && !faucetActive ? "page" : undefined}
+            >
+              <AppIcon icon={AccountBalanceIcon} size={16} />
+              Vaults
+            </Link>
+            <Link
+              href={FAUCET_PATH}
+              className={navLinkClass(faucetActive)}
               aria-current={faucetActive ? "page" : undefined}
             >
+              <AppIcon icon={WaterDropIcon} size={16} />
               Faucet
             </Link>
             <span className="text-ink/55" aria-hidden="true">
@@ -45,6 +69,7 @@ export function SiteHeader() {
                 disabled={isPending || !canConnect}
                 onClick={() => void connectWallet()}
               >
+                <AppIcon icon={AccountBalanceWalletIcon} size={16} />
                 {isPending ? "Connecting…" : "Connect"}
               </button>
             )}
@@ -58,7 +83,13 @@ export function SiteHeader() {
   );
 }
 
-function WalletChip({ address, onDisconnect }: { address: string; onDisconnect: () => void }) {
+function WalletChip({
+  address,
+  onDisconnect,
+}: {
+  address: string;
+  onDisconnect: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const label = shorten(address);
@@ -92,6 +123,7 @@ function WalletChip({ address, onDisconnect }: { address: string; onDisconnect: 
         aria-haspopup="menu"
         onClick={() => setOpen((value) => !value)}
       >
+        <AppIcon icon={AccountBalanceWalletIcon} size={14} />
         {label}
       </button>
       {open ? (

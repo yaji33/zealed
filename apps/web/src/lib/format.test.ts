@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  defaultDepositAmount,
+  defaultFaucetAmount,
   formatCompactAmount,
   formatCountdown,
   formatUnits,
+  isWithinEuint64,
   parseUnits,
 } from "@/lib/format";
 
@@ -16,6 +19,16 @@ describe("amount formatting", () => {
     expect(() => parseUnits("1.0000001")).toThrow("Too many decimal places");
     expect(() => parseUnits("-1")).toThrow("Invalid amount");
     expect(() => parseUnits("")).toThrow("Enter an amount");
+  });
+
+  it("keeps deposit defaults inside euint64 for 18-decimal units", () => {
+    expect(defaultFaucetAmount(6)).toBe("100");
+    expect(defaultDepositAmount(6)).toBe("1");
+    expect(defaultFaucetAmount(18)).toBe("0.01");
+    expect(defaultDepositAmount(18)).toBe("0.01");
+    expect(isWithinEuint64(parseUnits("0.01", 18))).toBe(true);
+    expect(isWithinEuint64(parseUnits("100", 18))).toBe(false);
+    expect(isWithinEuint64(parseUnits("1918.4", 6))).toBe(true);
   });
 
   it("formats compact public aggregates and draw clocks", () => {

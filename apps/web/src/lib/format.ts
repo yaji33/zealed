@@ -9,6 +9,23 @@ export function formatUnits(value: bigint, decimals = 6): string {
   return neg ? `-${body}` : body;
 }
 
+/** Encrypted amounts are euint64; 100 whole 18-decimal units overflow that range. */
+const EUINT64_MAX = 2n ** 64n - 1n;
+
+/** Faucet mint/wrap default in human tokens. Cap 18-decimal underlyings. */
+export function defaultFaucetAmount(underlyingDecimals: number): string {
+  return underlyingDecimals > 6 ? "0.01" : "100";
+}
+
+/** Deposit field default. Matches a safe faucet mint on 18-decimal underlyings. */
+export function defaultDepositAmount(underlyingDecimals: number): string {
+  return underlyingDecimals > 6 ? "0.01" : "1";
+}
+
+export function isWithinEuint64(value: bigint): boolean {
+  return value >= 0n && value <= EUINT64_MAX;
+}
+
 export function parseUnits(input: string, decimals = 6): bigint {
   const trimmed = input.trim();
   if (!trimmed) throw new Error("Enter an amount");

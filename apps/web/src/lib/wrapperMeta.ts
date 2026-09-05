@@ -7,7 +7,12 @@ export type WrapperMeta = {
   symbol: string;
   shortLabel: string;
   slug: string;
+  /** ERC-7984 confidential decimals. Official Sepolia mocks report 6. */
   decimals: number;
+  /** Public mock underlying decimals. WETH/ZAMA underlyings are 18. */
+  underlyingDecimals: number;
+  /** Human faucet mint/wrap amount, about $100 notional. */
+  mintUsd100: string;
   accent: string;
   mintable: boolean;
 };
@@ -20,6 +25,8 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     shortLabel: "cUSDC",
     slug: "cusdc",
     decimals: 6,
+    underlyingDecimals: 6,
+    mintUsd100: "100",
     accent: "#2775CA",
     mintable: true,
   },
@@ -30,6 +37,8 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     shortLabel: "cUSDT",
     slug: "cusdt",
     decimals: 6,
+    underlyingDecimals: 6,
+    mintUsd100: "100",
     accent: "#26A17B",
     mintable: true,
   },
@@ -39,7 +48,9 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     symbol: "cWETHMock",
     shortLabel: "cWETH",
     slug: "cweth",
-    decimals: 18,
+    decimals: 6,
+    underlyingDecimals: 18,
+    mintUsd100: "0.04",
     accent: "#627EEA",
     mintable: true,
   },
@@ -49,7 +60,9 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     symbol: "cZAMAMock",
     shortLabel: "cZAMA",
     slug: "czama",
-    decimals: 18,
+    decimals: 6,
+    underlyingDecimals: 18,
+    mintUsd100: "1918.4",
     accent: "#E8C547",
     mintable: true,
   },
@@ -60,6 +73,8 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     shortLabel: "cXAUt",
     slug: "cxaut",
     decimals: 6,
+    underlyingDecimals: 6,
+    mintUsd100: "0.0226",
     accent: "#D4A84B",
     mintable: true,
   },
@@ -69,7 +84,9 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     symbol: "cBRONMock",
     shortLabel: "cBRON",
     slug: "cbron",
-    decimals: 18,
+    decimals: 6,
+    underlyingDecimals: 18,
+    mintUsd100: "1503",
     accent: "#CD7F32",
     mintable: true,
   },
@@ -79,7 +96,9 @@ export const ZAMA_SEPOLIA_WRAPPERS: readonly WrapperMeta[] = [
     symbol: "ctGBPMock",
     shortLabel: "ctGBP",
     slug: "ctgbp",
-    decimals: 18,
+    decimals: 6,
+    underlyingDecimals: 18,
+    mintUsd100: "74",
     accent: "#5B9FD4",
     mintable: true,
   },
@@ -121,6 +140,18 @@ export function wrapperDecimalsFor(asset: Address | undefined, fallback = 6): nu
   return metaForAsset(asset)?.decimals ?? fallback;
 }
 
+export function wrapperUnderlyingDecimalsFor(
+  asset: Address | undefined,
+  fallback = 6,
+): number {
+  return metaForAsset(asset)?.underlyingDecimals ?? fallback;
+}
+
 export function wrapperAccentFor(asset: Address | undefined): string {
   return metaForAsset(asset)?.accent ?? "#b8f5e6";
+}
+
+/** Faucet mint/wrap default in human tokens, about $100 of the selected asset. */
+export function defaultMintAmount(asset: Address | string | undefined): string {
+  return metaForAsset(asset)?.mintUsd100 ?? "100";
 }

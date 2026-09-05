@@ -19,7 +19,16 @@ import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useFhevm } from "@/lib/fhe";
 import { OPERATOR_UNTIL } from "@/lib/config";
 import { erc7984Abi, ticketEngineAbi, vaultAbi } from "@/lib/abi/zealed";
-import { formatUnits, parseUnits } from "@/lib/format";
+import {
+  defaultDepositAmount,
+  formatUnits,
+  isWithinEuint64,
+  parseUnits,
+} from "@/lib/format";
+import {
+  wrapperDecimalsFor,
+  wrapperUnderlyingDecimalsFor,
+} from "@/lib/wrapperMeta";
 import { waitForOkTx } from "@/lib/waitForTx";
 import { noticeFromWalletError } from "@/lib/walletError";
 import {
@@ -47,7 +56,7 @@ export function PrivatePositionCard() {
   const client = usePublicClient();
   const fhe = useFhevm();
   const { writeContractAsync, data: txHash } = useWriteContract();
-  const [amount, setAmount] = useState("1");
+  const [amount, setAmount] = useState(defaultDepositAmount(6));
   const [mode, setMode] = useState<"deposit" | "withdraw">("deposit");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>({ kind: "idle", text: "" });
@@ -76,6 +85,10 @@ export function PrivatePositionCard() {
     functionName: "decimals",
     query: { enabled: Boolean(asset) },
   });
+  const resolvedDecimals = assetDecimals ?? wrapperDecimalsFor(asset, 6);
+  const depositDefault = defaultDepositAmount(
+    wrapperUnderlyingDecimalsFor(asset, resolvedDecimals),
+  );
   const { data: ticketIndex } = useReadContract({
     address: ticketEngine,
     abi: ticketEngineAbi,
@@ -91,7 +104,8 @@ export function PrivatePositionCard() {
     setBalance(null);
     setTwab(null);
     setWeight(null);
-  }, [address, vault]);
+    setAmount(depositDefault);
+  }, [address, depositDefault, vault]);
 
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -132,8 +146,11 @@ export function PrivatePositionCard() {
     await run(
       mode === "deposit" ? "Encrypting deposit…" : "Encrypting withdrawal…",
       async () => {
-        const parsed = parseUnits(amount, assetDecimals ?? 6);
+        const parsed = parseUnits(amount, resolvedDecimals);
         if (parsed <= 0n) throw new Error("Enter an amount greater than zero.");
+        if (!isWithinEuint64(parsed)) {
+          throw new Error("Amount exceeds the encrypted amount limit.");
+        }
         const encrypted = await fhe.encryptUint64(vault, parsed);
         const hash = await writeContractAsync({
           address: vault,
@@ -307,6 +324,7 @@ export function PrivatePositionCard() {
                 className={monoClass}
                 value={amount}
                 onChange={(event) => setAmount(event.target.value)}
+                placeholder={depositDefault}
                 inputMode="decimal"
               />
             </label>

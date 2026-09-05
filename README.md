@@ -5,7 +5,8 @@ ERC-7984 asset vault, hold private positions, withdraw principal at any time, an
 eligibility for prizes funded separately from that vault's principal.
 
 The curated multi-vault, multi-tier architecture is deployed and verified on Sepolia. The live registry
-contains independent cUSDCMock and cUSDTMock systems; deployment records and operating commands are
+contains independent cUSDCMock and cUSDTMock systems; the web app opens on a vaults directory and
+loads each isolated bundle from the registry. Deployment records and operating commands are
 documented in `docs/deployment.md`.
 
 ## Target architecture
@@ -80,6 +81,20 @@ pnpm --filter @zealed/web dev
 ```
 
 See `packages/contracts/README.md` and `apps/web/README.md` for package-specific guidance.
+
+## Using the app
+
+The public client opens on `/dashboard`, a vaults directory of curated ERC-7984 systems. Each row
+shows **Principal TVL** and **Available prize liquidity** as separate public aggregates. Individual
+balances stay encrypted and are never decrypted in the directory.
+
+- `/dashboard` — vaults directory
+- `/dashboard/{slug}` — selected vault workspace (deposit, withdraw, decrypt, prize checks)
+- `/dashboard/faucet` — mint the selected wrapper's public mock and wrap it to ERC-7984
+
+Prize funding is sponsor-funded mock yield in `PrizePool`, not accrued vault yield. Adding another
+official Zama Sepolia mock uses `vault:add:sepolia` with a new isolated bundle; see
+`docs/deployment.md`.
 
 ## Status discipline
 

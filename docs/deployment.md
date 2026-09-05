@@ -86,6 +86,32 @@ pnpm --filter @zealed/contracts vault:add:sepolia
 After verification and smoke testing, set `NEXT_PUBLIC_VAULT_REGISTRY_ADDRESS` in the web deployment.
 The legacy individual addresses remain a fallback and withdrawal path, not a second registry entry.
 
+## Additional official wrappers
+
+The frontend catalog in `apps/web/src/lib/wrapperMeta.ts` already knows the publicly mintable Zama
+Sepolia mocks. Registering another vault is a curated owner action, not permissionless listing. Skip
+restricted `ctGBP`. Priority order: `cWETHMock`, `cZAMAMock`, `cXAUtMock`, then `cBRONMock` /
+`ctGBPMock`.
+
+From [Zama Sepolia addresses](https://docs.zama.org/protocol/protocol-apps/addresses/testnet/sepolia):
+
+- `cWETHMock` `0x46208622DA27d91db4f0393733C8BA082ed83158` — `VAULT_ID=cweth`
+- `cZAMAMock` `0xf2D628d2598aF4eAF94CB76a437Ff86CA78FfbFB` — `VAULT_ID=czama`
+- `cXAUtMock` `0xe4FcF848739845BC81Dee1d5352cf3844F0a60C7` — `VAULT_ID=cxaut`
+- `cBRONMock` `0xaa5612FA27c927a0c7961f5AEFEE5ba3A0F9C891` — `VAULT_ID=cbron`
+- `ctGBPMock` `0xfCE5c7069c5525eF6c8C2b2E35A745bA20a2F7CC` — `VAULT_ID=ctgbp`
+
+Each add deploys a fresh `ConfidentialVault`, `TicketEngine`, `PrizePool`, and `DrawManager`. Do not
+reuse assets or components across vault IDs. After register:
+
+```bash
+VAULT_ID=cweth pnpm --filter @zealed/contracts prizes:fund:sepolia
+```
+
+Keeper coverage must include every active registry entry. The web directory reads the live registry
+and will show a new row without a frontend redeploy, aside from optional metadata already listed
+above.
+
 ## Architecture enforcement
 
 - **Curated multi-vault.** Every vault system remains internally immutable: `ConfidentialVault.asset`

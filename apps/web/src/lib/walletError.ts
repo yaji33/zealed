@@ -115,6 +115,49 @@ function isEmptyRevertLine(line: string): boolean {
   return /reverted with the following reason:\s*$/i.test(line);
 }
 
+function isEthGasShortage(blob: string): boolean {
+  return (
+    blob.includes("insufficient funds for gas") ||
+    blob.includes("gas * price") ||
+    blob.includes("intrinsic gas") ||
+    blob.includes("maxfeepergas") ||
+    (blob.includes("insufficient funds") && blob.includes("gas")) ||
+    (blob.includes("insufficient funds") &&
+      !blob.includes("token") &&
+      !blob.includes("erc20") &&
+      !blob.includes("transfer") &&
+      !blob.includes("allowance"))
+  );
+}
+
+function isTokenBalanceShortage(blob: string): boolean {
+  return (
+    blob.includes("transfer amount exceeds") ||
+    blob.includes("erc20insufficientbalance") ||
+    blob.includes("insufficient token") ||
+    (blob.includes("insufficient balance") && !blob.includes("gas"))
+  );
+}
+
+function isApprovalOrOperatorShortage(
+  blob: string,
+  revertName: string | undefined,
+): boolean {
+  if (
+    revertName === "ERC20InsufficientAllowance" ||
+    revertName === "UnauthorizedOperator"
+  ) {
+    return true;
+  }
+  return (
+    blob.includes("insufficient allowance") ||
+    blob.includes("erc20insufficientallowance") ||
+    blob.includes("unauthorizedoperator") ||
+    blob.includes("not an operator") ||
+    blob.includes("not operator")
+  );
+}
+
 function namedRevert(err: unknown): string | undefined {
   const fromAbi = revertErrorName(err);
   if (fromAbi && REVERT_COPY[fromAbi]) return fromAbi;
@@ -138,10 +181,19 @@ export function noticeFromWalletError(
   }
 
   const blob = fullText(err).toLowerCase();
-  if (
-    blob.includes("insufficient funds") ||
-    blob.includes("insufficient balance")
-  ) {
+  if (isApprovalOrOperatorShortage(blob, namedRevert(err))) {
+    return {
+      kind: "err",
+      text: "Approve the token or grant operator permission first.",
+    };
+  }
+  if (isTokenBalanceShortage(blob)) {
+    return {
+      kind: "err",
+      text: "Not enough token balance for this amount.",
+    };
+  }
+  if (isEthGasShortage(blob)) {
     return { kind: "err", text: "Not enough Sepolia ETH to cover gas." };
   }
 

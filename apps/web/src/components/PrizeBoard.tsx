@@ -16,6 +16,7 @@ import { DrawCyclePanel } from "@/components/DrawCyclePanel";
 import { ExplorerTxLink } from "@/components/ExplorerTxLink";
 import { PrivateOddsPanel } from "@/components/PrivateOddsPanel";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
+import { type DrawCyclePhase, useDrawCycle } from "@/hooks/useDrawCycle";
 import { usePrizePoolData } from "@/hooks/usePrizePoolData";
 import { drawManagerAbi } from "@/lib/abi/zealed";
 import { DRAW_CHECK_GAS, DRAW_CLAIM_GAS } from "@/lib/draw";
@@ -35,12 +36,29 @@ import {
 
 type Notice = { kind: "idle" | "ok" | "err" | "cancel"; text: string };
 
+function emptyDrawCopy(phase: DrawCyclePhase): string {
+  if (phase === "awaiting-award") {
+    return "Draw closed. Award is pending. Prize slots appear after the keeper awards this draw.";
+  }
+  if (phase === "ready-to-close") {
+    return "The draw interval ended. Close the draw or wait for the keeper, then wait for award.";
+  }
+  if (phase === "reconciliation") {
+    return "The previous claim window ended. Slots return after the next close and award.";
+  }
+  return "No awarded draw yet. Eligibility is accruing. The keeper closes and awards on a 20-minute demo cadence.";
+}
+
 export function PrizeBoard() {
   const pool = usePrizePoolData();
   const { selected } = useVaultDirectory();
   const configured = Boolean(selected);
   const drawId = pool.data?.activeDrawId;
+  const cycle = useDrawCycle();
   const assetLabel = selected?.label ?? "token";
+  const emptyPrizes =
+    pool.data !== undefined &&
+    pool.data.tiers.every((tier) => tier.prizePerSlot === 0n);
 
   return (
     <section
@@ -68,9 +86,16 @@ export function PrizeBoard() {
           Prize slots could not be loaded. Try again shortly.
         </p>
       ) : drawId === undefined || drawId === 0n ? (
-        <p className={bannerClass}>No active awarded draw yet.</p>
+        <p className={bannerClass}>{emptyDrawCopy(cycle.phase)}</p>
       ) : (
         <div className="mt-6 space-y-6">
+          {emptyPrizes ? (
+            <p className={bannerWarnClass}>
+              This awarded draw has no prize per slot. Available prize
+              liquidity was empty at award. Checks still record an encrypted
+              result; decrypt to confirm.
+            </p>
+          ) : null}
           <PrivateOddsPanel drawId={drawId} />
           {pool.data.tiers.map((tier) => (
             <section key={tier.id} aria-labelledby={`tier-${tier.id}`}>

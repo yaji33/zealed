@@ -5,6 +5,7 @@ import WaterDropIcon from "@mui/icons-material/WaterDrop";
 import { useAccount } from "wagmi";
 import { AppIcon } from "@/components/AppIcon";
 import { HeroBanner } from "@/components/HeroBanner";
+import { NetworkGuard } from "@/components/NetworkGuard";
 import { VaultSelector } from "@/components/VaultSelector";
 import { WalletGate } from "@/components/WalletGate";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
@@ -43,19 +44,6 @@ export function FaucetApp() {
     return <AppPanel message="Checking wallet…" />;
   }
 
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col gap-6">
-        <HeroBanner
-          icon={<AppIcon icon={WaterDropIcon} size={22} />}
-          headline="Mint, wrap, deposit."
-          line={`Get test ${assetLabel} for the selected vault.`}
-        />
-        <WalletGate />
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <HeroBanner
@@ -63,8 +51,16 @@ export function FaucetApp() {
         headline="Mint, wrap, deposit."
         line={`Get test ${assetLabel} for the selected vault.`}
       />
-      <VaultSelector />
-      <CusdcFaucetCard />
+      <NetworkGuard>
+        {!isConnected ? (
+          <WalletGate />
+        ) : (
+          <>
+            <VaultSelector />
+            <CusdcFaucetCard />
+          </>
+        )}
+      </NetworkGuard>
     </div>
   );
 }

@@ -370,6 +370,8 @@ contract DrawManager is ZamaEthereumConfig, ReentrancyGuard {
         return (start, weight);
     }
 
+    /// @dev Maps rand in [0, 2^64) onto [0, totalScore) by multiply-high.
+    /// Relative bias is at most (totalScore - 1) / 2^64. See docs/privacy.md.
     function _computeWin(
         uint64 totalScore,
         uint256 id,

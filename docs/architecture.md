@@ -151,6 +151,8 @@ Zama documents this operation as a cryptographically secure encrypted random val
 - map the 64-bit value to the sealed snapshot domain with a documented bias analysis;
 - test zero-weight and domain-boundary behavior.
 
+The live mapping multiplies `FHE.randEuint64()` by the sealed `totalScore` in `euint128` and compares that product to `[start, end)` scaled by `2^64`. Relative bias is at most `(totalScore − 1) / 2^64`. Full write-up: [`docs/privacy.md`](privacy.md#encrypted-random-mapping-and-bias).
+
 ## Pull-based checks
 
 A user requests a check for one `(drawId, tierId, slotId)` tuple.

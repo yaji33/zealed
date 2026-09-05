@@ -7,10 +7,18 @@ type AnchorLinkProps = {
   href: string;
   className?: string;
   children: ReactNode;
+  onClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
 };
 
-export function AnchorLink({ href, className, children }: AnchorLinkProps) {
+export function AnchorLink({
+  href,
+  className,
+  children,
+  onClick,
+}: AnchorLinkProps) {
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(event);
+    if (event.defaultPrevented) return;
     if (!href.startsWith("#")) return;
 
     const id = href.slice(1);

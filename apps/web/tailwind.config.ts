@@ -58,12 +58,17 @@ const config: Config = {
           "0%, 100%": { transform: "scale(1)" },
           "50%": { transform: "scale(1.05)" },
         },
+        "zealed-load": {
+          "0%": { transform: "translateX(-120%)" },
+          "100%": { transform: "translateX(280%)" },
+        },
       },
       animation: {
         "step-dot-wave": "step-dot-wave 2.8s ease-in-out infinite",
         "step-orbit": "step-orbit 24s linear infinite",
         "step-orbit-reverse": "step-orbit-reverse 26s linear infinite",
         "step-breathe": "step-breathe 5s ease-in-out infinite",
+        "zealed-load": "zealed-load 1.15s ease-in-out infinite",
       },
     },
   },

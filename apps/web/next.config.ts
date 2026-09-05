@@ -9,7 +9,12 @@ const cdpSdkStub = path.join(appDir, "src/lib/cdpSdkStub.ts");
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   experimental: {
-    optimizePackageImports: ["viem", "@tanstack/react-query", "@mui/icons-material"],
+    optimizePackageImports: [
+      "viem",
+      "@tanstack/react-query",
+      "@mui/icons-material",
+      "lucide-react",
+    ],
   },
   turbopack: {
     resolveAlias: {

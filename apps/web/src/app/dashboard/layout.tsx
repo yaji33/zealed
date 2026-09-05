@@ -19,7 +19,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-svh bg-base font-dm-sans text-ink">
       <SiteHeader />
-      <main className="mx-auto w-full max-w-[1100px] px-4 pb-16 pt-8">{children}</main>
+      <main className="mx-auto w-full max-w-[1160px] px-4 pb-16 pt-8">{children}</main>
     </div>
   );
 }

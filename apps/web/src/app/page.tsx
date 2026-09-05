@@ -13,49 +13,49 @@ const CONTRACTS = [
   {
     name: "ConfidentialVault",
     address: addresses.vault,
-    body: "One principal custodian inside each curated asset system. Tracks encrypted balances and keeps withdrawal available through every draw phase.",
+    body: "Custodies encrypted principal. Withdrawal stays open through every draw.",
   },
   {
     name: "TicketEngine",
     address: addresses.ticketEngine,
-    body: "Versions encrypted balance-time checkpoints in a Fenwick tree so closed draws stay immutable while later deposits update a new active version.",
+    body: "Versions encrypted checkpoints so closed draws stay immutable.",
   },
   {
     name: "PrizePool",
     address: addresses.prizePool,
-    body: "Isolates sponsor-funded mock yield from principal. Allocates bounded Grand, Standard, and Community tiers plus reserve and rollover.",
+    body: "Holds sponsor-funded mock yield, separate from principal.",
   },
   {
     name: "DrawManager",
     address: addresses.drawManager,
-    body: "Stores one encrypted FHE.randEuint64() value per bounded prize slot. Users check one slot at a time; nothing loops over depositors.",
+    body: "Stores encrypted FHE.randEuint64() per slot. You check one at a time.",
   },
 ] as const;
 
 const FAQ = [
   {
     q: "Can I lose my deposit?",
-    a: "No. Principal stays in ConfidentialVault and is withdrawable at any time. Prizes are paid only from PrizePool sponsor-funded mock yield, never from saver principal.",
+    a: "No. Principal stays in ConfidentialVault and is withdrawable at any time. Prizes are paid only from PrizePool sponsor-funded mock yield.",
   },
   {
     q: "If balances are encrypted, how can the draw be fair?",
-    a: "Each prize slot stores an encrypted random value generated onchain with FHE.randEuint64(). Your client compares that value against your encrypted historical range. Fairness does not require publishing your balance.",
+    a: "Each prize slot stores onchain FHE.randEuint64() randomness. Your client compares it to your encrypted range. Fairness does not require publishing your balance.",
   },
   {
     q: "Can anyone tell whether I won?",
-    a: "No. You check your own tier slot, and the answer stays encrypted. A losing check and a winning check look the same onchain. Optional tier-only disclosure never publishes the prize amount.",
+    a: "No. A losing check and a winning check look the same onchain. Only you decrypt the result.",
   },
   {
     q: "What can the public actually see?",
-    a: "Aggregates only: principal TVL when published, available prize liquidity, reserve, tier allocations and slot counts, draw lifecycle, and snapshot versions. Individual deposits, odds, outcomes, and prize amounts stay sealed.",
+    a: "Aggregates only: principal TVL, available prize liquidity, reserve, tier allocations, draw lifecycle, and snapshot versions.",
   },
   {
     q: "What asset does the pool hold?",
-    a: "Zealed supports curated asset-specific ERC-7984 vaults. Each vault has isolated principal, eligibility snapshots, draws, and prize liquidity. The Sepolia faucet mints the selected vault's official mock underlying (cUSDC or cUSDT).",
+    a: "Curated ERC-7984 vaults, one asset each. The Sepolia faucet mints the selected vault's official mock underlying.",
   },
   {
     q: "Is this live?",
-    a: "Yes. The verified Sepolia registry exposes independent cUSDCMock and cUSDTMock vault systems with isolated principal, draws, and prize liquidity.",
+    a: "Yes. The verified Sepolia registry lists independent confidential wrapper vaults with isolated principal, draws, and prize liquidity.",
   },
 ] as const;
 
@@ -87,11 +87,8 @@ export default function HomePage() {
       <ScrollRevealSection id="contracts" className={sectionClass}>
         <h2>The contracts</h2>
         <p className="-mt-7 mb-10 max-w-[44rem] text-muted">
-          Zealed runs on the Zama Protocol&apos;s fhEVM with one principal vault
-          and a separate prize pool. Contracts add, compare, and select over
-          encrypted values without decrypting them. Per-slot randomness stays
-          encrypted; decryption of your own result happens on your device with
-          your key.
+          One principal vault and a separate prize pool on Zama fhEVM. Values stay
+          encrypted onchain. You decrypt your own result locally.
         </p>
         <StaggerGrid className="grid grid-cols-2 gap-5 max-[760px]:grid-cols-1 xl:grid-cols-4">
           {CONTRACTS.map((contract) => (
@@ -152,7 +149,7 @@ export default function HomePage() {
               Zealed
             </span>
             <p className="mt-2.5 max-w-[20rem] text-[0.9rem] text-muted">
-              Confidential prize savings. Save together, win in private.
+              Confidential prize savings. Save. Win privately.
             </p>
           </div>
           <nav

@@ -2,11 +2,14 @@
 
 import dynamic from "next/dynamic";
 
-const DashboardApp = dynamic(
-  () => import("@/components/DashboardApp").then((m) => ({ default: m.DashboardApp })),
+const VaultsDirectory = dynamic(
+  () =>
+    import("@/components/VaultsDirectory").then((m) => ({
+      default: m.VaultsDirectory,
+    })),
   { ssr: false },
 );
 
 export default function DashboardPage() {
-  return <DashboardApp />;
+  return <VaultsDirectory />;
 }

@@ -2,8 +2,12 @@
 
 Next.js client for Zealed’s public aggregate view and wallet-scoped private actions.
 
-Status: the client discovers the verified Sepolia cUSDCMock and cUSDTMock systems through the live
-registry. Accounting, private actions, draw data, and faucet wrapping follow the selected vault.
+Status: the client discovers the verified Sepolia registry and renders a public vaults directory.
+Accounting, private actions, draw data, and faucet wrapping follow the selected vault.
+
+The directory lists **Principal TVL** and **Available prize liquidity** as separate columns. It never
+combines those buckets and never user-decrypts positions. Decrypting a connected wallet happens only
+on `/dashboard/{slug}`.
 
 ## Setup
 

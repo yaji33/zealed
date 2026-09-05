@@ -1,113 +1,303 @@
 # Zealed
 
-Zealed is a curated multi-vault confidential prize-savings protocol on Zama fhEVM. Savers choose an
-ERC-7984 asset vault, hold private positions, withdraw principal at any time, and privately check
-eligibility for prizes funded separately from that vault's principal.
+Confidential prize savings on [Zama](https://www.zama.org/) fhEVM: a privacy-preserving take on the [PoolTogether](https://pooltogether.com/) no-loss prize model.
 
-The curated multi-vault, multi-tier architecture is deployed and verified on Sepolia. The live registry
-contains independent cUSDC, cUSDT, cWETH, cZAMA, cXAUt, and cBRON systems; the web app opens on a vaults directory and
-loads each isolated bundle from the registry. Deployment records and operating commands are
-documented in `docs/deployment.md`.
 
-## Target architecture
+---
 
-- **VaultRegistry** discovers curated, fully wired asset-specific vault systems without holding funds.
-- **ConfidentialVault** holds ERC-7984 principal and keeps withdrawal independent from draws.
-- **TicketEngine** records encrypted cumulative balances in versioned Fenwick snapshots.
-- **PrizePool** isolates sponsor-funded mock yield and accounts for available liquidity, reserve, tier allocations, claims, and rollover.
-- **DrawManager** stores encrypted `FHE.randEuint64()` values for a bounded set of prize slots.
-- **Users** check one draw slot at a time. The contract compares only that user’s encrypted range and returns an encrypted prize or encrypted zero.
-- **The web client** encrypts inputs and performs EIP-712-authorized user decryption locally.
+## Overview
 
-Winner checks never loop over depositors.
+Zealed is a **curated multi-vault** confidential prize-savings protocol. Savers pick an ERC-7984 asset vault, keep deposits encrypted, withdraw principal at any time, and privately check eligibility for periodic prizes. Prizes are paid only from a separate sponsor-funded pool, never from saver principal.
 
-Each registry entry binds one asset, vault, ticket engine, prize pool, and draw manager. Assets and
-components cannot be reused across entries, preventing cross-vault custody or accounting mistakes.
+Live on **Ethereum Sepolia** via a verified `VaultRegistry` that lists independent vault systems (cUSDC, cUSDT, cWETH, cZAMA, cXAUt, cBRON). Deployment records: [`docs/deployment.md`](docs/deployment.md).
 
-## Accounting at a glance
+---
 
-- **Principal TVL** belongs to savers and remains withdrawable.
-- **Available prize liquidity** is uncommitted sponsor-funded mock yield.
-- **Reserve** is prize liquidity held back as a backstop.
-- **Tier allocations** are draw-specific prize budgets.
-- **Rollover** returns unused tier liquidity to future draws.
+## What is this for?
 
-These figures must remain separate in contract accounting and UI labels. Prize funding must never reduce principal TVL.
+Public prize-savings apps broadcast deposit sizes, odds, and winners on-chain. That deters privacy-conscious individuals, companies, DAOs, and families who would otherwise save in a no-loss lottery.
 
-## Privacy boundary
+Zealed keeps the fairness properties of prize savings (verifiable draw lifecycle, bounded tiers, auditable prize liquidity) while making **individual positions private by default**. Other depositors, explorers, and protocol observers cannot see a user’s deposit, balance, or draw outcome unless that user decrypts client-side.
 
-Encrypted:
+---
 
-- user deposit and withdrawal amounts;
-- user balances, cumulative balances, ticket weights, and ranges;
-- per-slot random values;
-- individual outcomes and prize amounts;
-- confidential asset transfers.
+## PoolTogether × Zama
 
-Public:
+| Idea | PoolTogether (reference) | Zealed |
+| --- | --- | --- |
+| Principal | Always withdrawable | Always withdrawable (encrypted ERC-7984) |
+| Prize funding | Yield / contributed prize assets, not deposits | Sponsor-funded mock yield in `PrizePool` only |
+| Odds | Proportional to deposit | Encrypted cumulative balance / Fenwick range |
+| Draw | Public winners | Encrypted slots + pull-based private checks |
+| Privacy | Public by default | FHE on fhEVM; EIP-712 user decryption |
 
-- draw timing and lifecycle;
-- snapshot versions;
-- tier definitions and bounded slot counts;
-- aggregate sponsor funding, prize liquidity, reserve, allocations, rollover, and paid totals;
-- principal TVL only when intentionally published as an aggregate.
+Zealed adopts PoolTogether’s separation of **principal vs prize liquidity** and multi-tier prize budgeting, then implements eligibility and outcomes with Zama FHE (`FHE.randEuint64()`, ACL-gated ciphertext, client user-decrypt).
 
-Plaintext user amounts are prohibited in events, application logs, test logs, and console output.
+---
 
-## Repository
+## Architecture
 
-```text
-apps/web/                  Next.js client
-packages/contracts/        Hardhat and fhEVM contracts
-docs/architecture.md       Target system design
-docs/economics.md          Prize liquidity and rollover accounting
-docs/privacy.md            Confidentiality and observable leakage
-docs/operations.md         Permissionless draw lifecycle
-docs/deployment.md         Sepolia deployment and legacy withdrawal
-build-brief.md             Canonical product requirements
-CLAUDE.md                  Repository-wide engineering constraints
-.cursor/rules/             Scoped Cursor rules
-.claude/skills/            Project-specific fhEVM guidance
+Canonical design: [`docs/architecture.md`](docs/architecture.md). Product requirements: [`build-brief.md`](build-brief.md).
+
+```mermaid
+flowchart LR
+    User[User wallet]
+    Web[Next.js client]
+    Asset[ERC-7984 asset]
+    Vault[ConfidentialVault]
+    Tickets[TicketEngine]
+    Pool[PrizePool]
+    Draw[DrawManager]
+    Sponsor[Sponsor]
+    Registry[VaultRegistry]
+    Faucet[Faucet mint and wrap]
+
+    User <--> Web
+    Web -->|discover vaultId| Registry
+    Web -->|encrypted deposit or withdraw| Vault
+    Web --> Faucet
+    Faucet -->|mock underlying then wrap| Asset
+    Vault <--> Asset
+    Vault -->|encrypted checkpoints| Tickets
+    Sponsor -->|mock yield only| Pool
+    Pool -->|tier allocations| Draw
+    Draw -->|confidential prize auth| Pool
+    Pool -->|encrypted prize transfer| Asset
+    Web -->|slot check and user decrypt| Draw
 ```
 
-## Local development
+### Multi-vault
 
-Requirements: Node.js, pnpm, and the environment values described by each package.
+One registry entry is an isolated bundle:
+
+```text
+vaultId → asset + ConfidentialVault + TicketEngine + PrizePool + DrawManager
+```
+
+- `VaultRegistry` is curated and **non-custodial** (no funds).
+- Assets and components cannot be reused across entries.
+- Deactivation hides discovery only; principal withdrawal stays on the vault contract.
+
+### Multi-tier prizes
+
+Each draw uses a fixed bounded config (Grand / Standard / Community): tier shares, reserve, and a small number of slots per tier (`PrizePool.TIER_COUNT = 3`, `MAX_SLOTS_PER_TIER = 4`). Unused tier liquidity rolls over after the claim window.
+
+### Draw model (pull-based)
+
+1. Close accrues an immutable Fenwick / cumulative-balance snapshot; new deposits continue on a new version.
+2. Award allocates tier budgets and stores **encrypted** `FHE.randEuint64()` per slot.
+3. Each user checks **one** `(draw, tier, slot)`: encrypted range compare to encrypted prize or encrypted zero (no plaintext lose signal).
+4. User decrypts locally via EIP-712-authorized relayer flow.
+5. After the claim window, keeper reconciles rollover.
+
+Winner checks **never loop over depositors**.
+
+### Faucet
+
+Sepolia demo wallets mint the selected vault’s official mock underlying, approve, and wrap to ERC-7984 (`/dashboard/faucet`). That is for **principal deposits**, not prize funding.
+
+### Accounting vocabulary
+
+- **Principal TVL**: saver deposits in `ConfidentialVault` (always withdrawable).
+- **Available prize liquidity**: uncommitted sponsor funds in `PrizePool`.
+- **Reserve / tier allocation / rollover**: prize-side buckets only.
+
+Never combine these into an ambiguous “pool size.”
+
+---
+
+## Tech stack
+
+| Layer | Stack |
+| --- | --- |
+| Contracts | Solidity, `@fhevm/solidity`, Hardhat, OpenZeppelin confidential contracts (ERC-7984) |
+| Randomness | Onchain `FHE.randEuint64()` per prize slot |
+| Frontend | Next.js 15, TypeScript, wagmi / viem, Privy, TanStack Query, Tailwind, Framer Motion |
+| FHE client | `@zama-fhe/relayer-sdk` (encrypt + EIP-712 user decrypt) |
+| Monorepo | pnpm + Turborepo |
+| Network | Ethereum Sepolia (fhEVM) |
+
+---
+
+## Tests
+
+Verified locally: **33** contract tests and **24** web unit tests passing.
+
+### Contracts (`pnpm --filter @zealed/contracts test`)
+
+**ConfidentialVault**
+- rejects zero-address dependencies and protects TicketEngine configuration
+- deposits encrypted principal and exposes only wallet-authorized balances
+- withdraws encrypted principal immediately and keeps TVL exact
+- turns an oversized encrypted withdrawal into a zero-value no-op
+- updates cumulative-balance observations without mixing depositor state
+- emits no plaintext amount fields for vault actions
+
+**TicketEngine**
+- uses immutable owner-only wiring and permanent one-based indexes
+- tracks current encrypted balances without cross-account leakage
+- computes exact balance-time weights and cumulative boundaries
+- keeps a closed snapshot immutable across later withdrawal checkpoints
+
+**PrizePool**
+- validates immutable configuration and owner-only one-time wiring
+- synchronizes public accounting to the actual confidential token balance
+- allocates all three tiers, multiple slots, reserve, and rounding dust
+- remains reserve-solvent after every allocated slot is claimed
+- requires nonzero contributions and operator authorization
+
+**DrawManager**
+- closes, verifies the public total, allocates, and awards bounded FHE-random slots
+- selects exactly one winner per slot across all tiers and returns encrypted zero on loss
+- covers the full single-user range and excludes a zero-weight historical range
+- decrypts pending prizes, pays winners from PrizePool, and guards check and claim replay
+- keeps principal withdrawable during closed, awarded, and active-claim phases
+- expires checks and claims, then reconciles actual balance into solvent reserve and rollover
+- recovers an empty period with a verified cancellation
+- keeps first-check gas bounded as depositor count grows
+
+**VaultRegistry**
+- registers and enumerates two independently wired asset vaults
+- keeps balances and principal custody isolated between vaults
+- rejects unauthorized, duplicate, incomplete, and mismatched systems
+- rejects every cross-wired component relationship
+- can hide a vault from discovery without blocking principal withdrawal
+
+**privacy surface**
+- does not expose amount fields in protocol events
+
+**keeperAction**
+- waits before the interval and closes when an initial or reconciled period matures
+- awards a closed non-awarded draw
+- waits during the claim window
+- prepares then finalizes reconciliation after expiry
+
+### Web (`pnpm --filter @zealed/web test`)
+
+**format**
+- round-trips six-decimal token amounts
+- rejects malformed and over-precise input
+- keeps deposit defaults inside euint64 for 18-decimal units
+- formats compact public aggregates and draw clocks
+
+**walletError**
+- maps wallet rejection to quiet copy
+- does not expose verbose library metadata
+- maps insufficient gas without exposing raw RPC text
+
+**wrapperMeta**
+- decodes curated vault ids into lowercase slugs
+- builds workspace paths and prize vault names
+- maps official Sepolia mock addresses without mixing symbols
+- defaults faucet mint to about $100 of each wrapper
+
+**useWrappedAsset**
+- isolates wrapped balances by underlying, wrapper, and account
+
+**useDrawCycle**
+- moves an open period through close and award
+- moves expired draws through reconciliation
+- stays loading without verified configuration
+
+**usePublicDrawData**
+- maps public lifecycle fields without user data
+
+**PrivateOddsPanel**
+- compounds the per-slot chance across a bounded tier
+- clamps impossible weights and rejects empty domains
+
+**PublicPoolOverview**
+- keeps principal, available prizes, reserve, and tiers separately labelled
+
+**VaultsDirectory**
+- lists isolated vaults without a combined pool size column
+- keeps connected positions sealed in the directory
+
+**VaultSelector**
+- presents active curated vaults and changes the selected bundle
+
+**NetworkGuard**
+- blocks transaction controls on the wrong network
+- renders children when disconnected
+
+Playwright e2e lives under `apps/web/e2e/` (`pnpm --filter @zealed/web test:e2e`).
+
+```bash
+pnpm --filter @zealed/contracts test
+pnpm --filter @zealed/web test
+pnpm --filter @zealed/web test:e2e
+```
+
+---
+
+## How to run locally
+
+**Requirements:** Node.js ≥ 20, pnpm 9.
 
 ```bash
 pnpm install
-pnpm --filter @zealed/contracts test
-pnpm --filter @zealed/web dev
 ```
 
-See `packages/contracts/README.md` and `apps/web/README.md` for package-specific guidance.
+### Contracts
 
-## Using the app
+```bash
+# Optional: hardhat vars set MNEMONIC / INFURA_API_KEY / ETHERSCAN_API_KEY
+cp packages/contracts/.env.example packages/contracts/.env   # set SEPOLIA_RPC_URL if needed
 
-The public client opens on `/dashboard`, a vaults directory of curated ERC-7984 systems. Each row
-shows **Principal TVL** and **Available prize liquidity** as separate public aggregates. Individual
-balances stay encrypted and are never decrypted in the directory.
+pnpm --filter @zealed/contracts compile
+pnpm --filter @zealed/contracts test
+```
 
-- `/dashboard` — vaults directory
-- `/dashboard/{slug}` — selected vault workspace (deposit, withdraw, decrypt, prize checks)
-- `/dashboard/faucet` — mint the selected wrapper's public mock and wrap it to ERC-7984
+Sepolia ops (funded deployer): see [`docs/deployment.md`](docs/deployment.md) for `vault:add:sepolia`, `prizes:fund:sepolia`, and `pnpm keeper`.
 
-Prize funding is sponsor-funded mock yield in `PrizePool`, not accrued vault yield. Adding another
-official Zama Sepolia mock uses `vault:add:sepolia` with a new isolated bundle; see
-`docs/deployment.md`.
+### Web app
 
-## Status discipline
+```bash
+cp apps/web/.env.example apps/web/.env.local
+# Set NEXT_PUBLIC_PRIVY_APP_ID, NEXT_PUBLIC_PRIVY_CLIENT_ID,
+# NEXT_PUBLIC_VAULT_REGISTRY_ADDRESS (default in .env.example)
 
-- Target behavior belongs in the brief and architecture document.
-- Implemented behavior must be supported by source and tests.
-- Deployed behavior must also have a matching verified deployment record.
-- Historical addresses are not canonical and are intentionally omitted here.
+pnpm --filter @zealed/web dev
+# → http://localhost:3001
+```
 
-## Primary references
+App routes:
+
+- `/`: marketing landing
+- `/dashboard`: vault directory (Principal TVL vs available prize liquidity)
+- `/dashboard/{slug}`: vault workspace
+- `/dashboard/faucet`: mint + wrap mock underlying
+
+---
+
+## Repository layout
+
+```text
+apps/web/                  Next.js client
+packages/contracts/        Hardhat + fhEVM contracts
+docs/architecture.md       System design
+docs/economics.md          Prize liquidity accounting
+docs/privacy.md            Confidentiality boundary
+docs/operations.md         Draw / keeper lifecycle
+docs/deployment.md         Sepolia deployment
+build-brief.md             Canonical product requirements
+LICENSE                    BSD 3-Clause Clear
+```
+
+---
+
+## License
+
+This project is licensed under the **BSD 3-Clause Clear License**. See [`LICENSE`](LICENSE).
+
+`packages/contracts` also declares `BSD-3-Clause-Clear` (fhEVM / Zama ecosystem alignment).
+
+---
+
+## References
 
 - [Zama Solidity guides](https://docs.zama.org/protocol/solidity-guides)
 - [Zama encrypted randomness](https://docs.zama.org/protocol/solidity-guides/smart-contract/operations/random)
-- [Zama ACL examples](https://docs.zama.org/protocol/solidity-guides/smart-contract/acl/acl_examples)
-- [Zama user decryption example](https://docs.zama.org/protocol/examples/basic/decryption/fhe-user-decrypt-single-value)
+- [Zama user decryption](https://docs.zama.org/protocol/examples/basic/decryption/fhe-user-decrypt-single-value)
 - [PoolTogether V5 protocol design](https://dev.pooltogether.com/protocol/design/)
-- [PoolTogether Prize Pool reference](https://dev.pooltogether.com/protocol/reference/prize-pool/)
+- [PoolTogether Prize Pool](https://dev.pooltogether.com/protocol/reference/prize-pool/)

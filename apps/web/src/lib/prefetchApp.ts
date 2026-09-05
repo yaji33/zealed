@@ -1,4 +1,5 @@
 export function prefetchDashboardChunks(): void {
+  void import("@/components/VaultsDirectory");
   void import("@/components/PrivateDashboard");
   void import("@/components/VaultChart");
   void import("@/components/FaucetApp");

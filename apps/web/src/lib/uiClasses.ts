@@ -30,10 +30,10 @@ export const statUnitClass = "ml-[0.35em] text-[0.42em] font-medium text-muted";
 export const statNoteClass = "relative m-0 text-[0.8rem] leading-snug text-muted";
 
 export const btnClass =
-  "cursor-pointer appearance-none rounded bg-mint px-[1.15rem] py-[0.55rem] font-dm-sans font-medium text-void disabled:cursor-not-allowed disabled:opacity-45";
+  "inline-flex cursor-pointer appearance-none items-center justify-center gap-2 rounded bg-mint px-[1.15rem] py-[0.55rem] font-dm-sans font-medium text-void disabled:cursor-not-allowed disabled:opacity-45";
 
 export const btnSecondaryClass =
-  "cursor-pointer appearance-none rounded border border-line/50 bg-transparent px-[1.15rem] py-[0.55rem] font-dm-sans font-medium text-ink disabled:cursor-not-allowed disabled:opacity-45";
+  "inline-flex cursor-pointer appearance-none items-center justify-center gap-2 rounded border border-line/50 bg-transparent px-[1.15rem] py-[0.55rem] font-dm-sans font-medium text-ink disabled:cursor-not-allowed disabled:opacity-45";
 
 export const bannerClass =
   "relative mt-4 rounded-lg bg-soft/80 px-[0.9rem] py-3 text-[0.92rem] leading-snug text-muted break-words";
@@ -60,7 +60,10 @@ export const fieldClass =
   "relative mb-3 grid gap-1.5 text-[0.85rem] text-muted [&_input]:rounded-lg [&_input]:border [&_input]:border-line/40 [&_input]:bg-base [&_input]:p-[0.65rem_0.75rem] [&_input]:font-inherit [&_input]:text-ink";
 
 export const dataTableClass =
-  "relative w-full border-collapse text-[0.92rem] [&_td]:border-b [&_td]:border-line/40 [&_td]:py-[0.7rem] [&_td]:pr-2 [&_td]:text-left [&_th]:border-b [&_th]:border-line/40 [&_th]:py-[0.7rem] [&_th]:pr-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted";
+  "relative w-full border-collapse text-[0.92rem] [&_td]:border-b [&_td]:border-line/40 [&_td]:py-[0.85rem] [&_td]:pr-3 [&_td]:text-left [&_th]:border-b [&_th]:border-line/40 [&_th]:py-[0.7rem] [&_th]:pr-3 [&_th]:text-left [&_th]:font-medium [&_th]:text-[0.72rem] [&_th]:uppercase [&_th]:tracking-[0.12em] [&_th]:text-muted";
+
+export const chainPillClass =
+  "inline-flex items-center rounded-full bg-soft px-2.5 py-0.5 text-[0.72rem] font-medium text-muted";
 
 export const pillOkClass =
   "inline-flex rounded px-[0.55rem] py-[0.15rem] text-[0.78rem] text-ok";

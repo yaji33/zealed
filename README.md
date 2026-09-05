@@ -5,7 +5,7 @@ ERC-7984 asset vault, hold private positions, withdraw principal at any time, an
 eligibility for prizes funded separately from that vault's principal.
 
 The curated multi-vault, multi-tier architecture is deployed and verified on Sepolia. The live registry
-contains independent cUSDCMock and cUSDTMock systems; the web app opens on a vaults directory and
+contains independent cUSDC, cUSDT, cWETH, cZAMA, cXAUt, and cBRON systems; the web app opens on a vaults directory and
 loads each isolated bundle from the registry. Deployment records and operating commands are
 documented in `docs/deployment.md`.
 

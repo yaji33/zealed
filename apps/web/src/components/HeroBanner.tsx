@@ -1,5 +1,6 @@
+import Image from "next/image";
 import type { ReactNode } from "react";
-import { cardClass } from "@/lib/uiClasses";
+import bannerBg from "@/assets/banner-bg.png";
 
 export function HeroBanner({
   icon,
@@ -15,13 +16,19 @@ export function HeroBanner({
   visual?: ReactNode;
 }) {
   return (
-    <section
-      className={`${cardClass} border-mint/25 bg-gradient-to-r from-mint/[0.08] via-surface to-ember/[0.06]`}
-    >
-      <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+    <section className="relative mb-5 overflow-hidden rounded-lg border-0 bg-transparent p-6 shadow-none sm:p-8">
+      <Image
+        src={bannerBg}
+        alt=""
+        fill
+        priority
+        sizes="100vw"
+        className="pointer-events-none z-0 object-cover object-bottom"
+      />
+      <div className="relative z-10 flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-4">
           {icon ? (
-            <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-mint/15 text-mint">
+            <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-void/40 text-mint backdrop-blur-sm">
               {icon}
             </span>
           ) : null}
@@ -30,7 +37,7 @@ export function HeroBanner({
               {headline}
             </h1>
             {line ? (
-              <p className="mt-2 max-w-xl text-[0.95rem] leading-snug text-muted">
+              <p className="mt-2 max-w-xl text-[0.95rem] leading-snug text-ink/75">
                 {line}
               </p>
             ) : null}

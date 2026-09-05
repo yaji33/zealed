@@ -17,6 +17,11 @@ import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useWrappedAsset, wrappedAssetQueryKey } from "@/hooks/useWrappedAsset";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
 import { formatUnits, parseUnits } from "@/lib/format";
+import {
+  defaultMintAmount,
+  wrapperDecimalsFor,
+  wrapperUnderlyingDecimalsFor,
+} from "@/lib/wrapperMeta";
 import { noticeFromWalletError, type AppNotice } from "@/lib/walletError";
 import {
   bannerClass,
@@ -29,13 +34,7 @@ import {
   ledeClass,
   monoClass,
   sectionTitleClass,
-  statLabelClass,
-  statNoteClass,
-  statValueClass,
-  statUnitClass,
 } from "@/lib/uiClasses";
-
-const DEFAULT_FAUCET_AMOUNT = "100";
 
 type FaucetStep = "mint" | "approve" | "wrap";
 type StepState = "complete" | "current" | "locked";
@@ -47,7 +46,7 @@ export function CusdcFaucetCard() {
   const { selected } = useVaultDirectory();
   const wrapper = selected?.asset;
 
-  const [wrapInput, setWrapInput] = useState("100");
+  const [wrapInput, setWrapInput] = useState(defaultMintAmount(undefined));
   const [activeStep, setActiveStep] = useState<FaucetStep | null>(null);
   const [stepNotice, setStepNotice] = useState<AppNotice | null>(null);
   const [stepOk, setStepOk] = useState<string | null>(null);
@@ -110,8 +109,11 @@ export function CusdcFaucetCard() {
   const confidentialLabel =
     wrapperSymbol ?? selected?.label ?? "confidential token";
   const underlyingLabel = underlyingSymbol ?? "underlying token";
-  const confidentialDecimals = wrapperDecimals ?? 6;
-  const publicDecimals = underlyingDecimals ?? 6;
+  const confidentialDecimals =
+    wrapperDecimals ?? wrapperDecimalsFor(wrapper, 6);
+  const publicDecimals =
+    underlyingDecimals ?? wrapperUnderlyingDecimalsFor(wrapper, confidentialDecimals);
+  const faucetDefault = defaultMintAmount(wrapper);
 
   const { data: underlyingBalance, refetch: refetchUnderlyingBalance } =
     useReadContract({
@@ -132,14 +134,13 @@ export function CusdcFaucetCard() {
 
   const {
     wrappedAmount,
-    isLoading: wrappedLoading,
     refetch: refetchWrapped,
   } = useWrappedAsset({ account: address, underlying, wrapper, rate });
 
   const mintAmount = useMemo(() => {
     const r = rate ?? 1n;
-    return parseUnits(DEFAULT_FAUCET_AMOUNT, confidentialDecimals) * r;
-  }, [confidentialDecimals, rate]);
+    return parseUnits(faucetDefault, confidentialDecimals) * r;
+  }, [confidentialDecimals, faucetDefault, rate]);
 
   const wrapAmount = useMemo(() => {
     try {
@@ -167,8 +168,8 @@ export function CusdcFaucetCard() {
     handledTx.current = undefined;
     setStepNotice(null);
     setStepOk(null);
-    setWrapInput(DEFAULT_FAUCET_AMOUNT);
-  }, [address, underlying, wrapper]);
+    setWrapInput(faucetDefault);
+  }, [address, faucetDefault, underlying, wrapper]);
 
   useEffect(() => {
     if (!approvedEnough)
@@ -228,7 +229,7 @@ export function CusdcFaucetCard() {
           wrappedAssetQueryKey(underlying, wrapper, address),
           (old: bigint | undefined) => (old ?? 0n) + added,
         );
-        setWrapInput(DEFAULT_FAUCET_AMOUNT);
+        setWrapInput(faucetDefault);
         setStepOk(
           `Wrapped to ${confidentialLabel}. Approve the selected vault, then deposit.`,
         );
@@ -329,17 +330,6 @@ export function CusdcFaucetCard() {
     }
   }
 
-  const flowLine = flowStatus({
-    working,
-    activeStep,
-    mintState,
-    approveState,
-    wrapState,
-  });
-
-  const wrappedDisplay =
-    !configured || (wrappedLoading && displayWrapped === 0n) ? "…" : null;
-
   return (
     <section className={cardClass}>
       <h2 className={sectionTitleClass}>Get {confidentialLabel}</h2>
@@ -351,8 +341,7 @@ export function CusdcFaucetCard() {
         </p>
       )}
 
-      <div className="relative mt-8 grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,20rem)] lg:items-stretch lg:gap-12">
-        <ol className="relative m-0 list-none p-0">
+      <ol className="relative mt-8 m-0 list-none p-0">
           <FaucetStepRow
             index={1}
             title={`Mint ${underlyingLabel}`}
@@ -450,6 +439,7 @@ export function CusdcFaucetCard() {
                 className={monoClass}
                 value={wrapInput}
                 onChange={(e) => setWrapInput(e.target.value)}
+                placeholder={faucetDefault}
                 inputMode="decimal"
                 disabled={working || !wrapOpen}
               />
@@ -475,27 +465,7 @@ export function CusdcFaucetCard() {
               )}
             </button>
           </FaucetStepRow>
-        </ol>
-
-        <aside className="relative flex flex-col items-center justify-center rounded-lg border border-edge bg-base px-6 py-8 text-center">
-          <p
-            className="relative m-0 font-dm-sans text-[1.2rem] font-medium text-ink"
-            aria-live="polite"
-          >
-            {flowLine}
-          </p>
-          <p className={`${statLabelClass} mt-8`}>Wrapped</p>
-          <p className={statValueClass}>
-            {wrappedDisplay ?? (
-              <>
-                {formatUnits(displayWrapped, confidentialDecimals)}
-                <span className={statUnitClass}>{confidentialLabel}</span>
-              </>
-            )}
-          </p>
-          <p className={statNoteClass}>Wrapped on this wallet.</p>
-        </aside>
-      </div>
+      </ol>
 
       {stepOk && <p className={bannerOkClass}>{stepOk}</p>}
       {stepNotice && (
@@ -595,27 +565,4 @@ function StepMarker({ index, state }: { index: number; state: StepState }) {
       <span className="sr-only">Step {index} locked</span>
     </span>
   );
-}
-
-function flowStatus({
-  working,
-  activeStep,
-  mintState,
-  approveState,
-  wrapState,
-}: {
-  working: boolean;
-  activeStep: FaucetStep | null;
-  mintState: StepState;
-  approveState: StepState;
-  wrapState: StepState;
-}): string {
-  if (working && activeStep === "mint") return "Minting";
-  if (working && activeStep === "approve") return "Waiting for approval";
-  if (working && activeStep === "wrap") return "Wrapping";
-  if (wrapState === "complete") return "Wrapped";
-  if (wrapState === "current") return "Ready to wrap";
-  if (approveState === "current") return "Waiting for approval";
-  if (mintState === "current") return "Ready to mint";
-  return "Ready to mint";
 }

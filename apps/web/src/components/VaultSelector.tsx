@@ -7,16 +7,17 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectItemText,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TokenIcon } from "@/components/TokenIcon";
 import { bannerWarnClass } from "@/lib/uiClasses";
 import {
   FAUCET_PATH,
   isVaultWorkspacePath,
   vaultWorkspacePath,
 } from "@/lib/vaultPath";
-import { wrapperAccentFor } from "@/lib/wrapperMeta";
 
 export function VaultSelector() {
   const router = useRouter();
@@ -66,12 +67,11 @@ export function VaultSelector() {
       aria-label="Prize vault selection"
     >
       <div className="flex min-w-0 items-center gap-3">
-        <span
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[0.68rem] font-semibold text-void"
-          style={{ background: wrapperAccentFor(selected.asset) }}
-        >
-          {selected.label.slice(0, 2)}
-        </span>
+        <TokenIcon
+          asset={selected.asset}
+          label={selected.label}
+          size={32}
+        />
         <div className="min-w-0">
           <p className="m-0 font-mono text-[0.65rem] tracking-[0.18em] text-ember">
             ACTIVE VAULT
@@ -96,8 +96,13 @@ export function VaultSelector() {
           </SelectTrigger>
           <SelectContent side="bottom" align="end" sideOffset={8}>
             {activeSystems.map((system) => (
-              <SelectItem key={system.id} value={system.id}>
-                {system.label}
+              <SelectItem key={system.id} value={system.id} textValue={system.label}>
+                <TokenIcon
+                  asset={system.asset}
+                  label={system.label}
+                  size={20}
+                />
+                <SelectItemText>{system.label}</SelectItemText>
               </SelectItem>
             ))}
           </SelectContent>

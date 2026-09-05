@@ -1,14 +1,16 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect } from "react";
 import AccountBalanceIcon from "@mui/icons-material/AccountBalance";
-import { AsciiPoolField } from "@/components/AsciiPoolField";
+import bannerBg from "@/assets/banner-bg.png";
 import { AppIcon } from "@/components/AppIcon";
+import { LandingPrizeLedger } from "@/components/LandingMarketPreview";
 import { AnchorLink } from "@/components/motion/AnchorLink";
-import { LandingStatsBanner } from "@/components/LandingStatsBanner";
 import { LaunchAppLink } from "@/components/LaunchAppLink";
+import { btnClass } from "@/lib/uiClasses";
 import { prefetchApp } from "@/lib/prefetchApp";
 import { revealEase } from "@/lib/motionPresets";
 import { VAULTS_PATH } from "@/lib/vaultPath";
@@ -21,74 +23,105 @@ export function LandingHero() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const headlineVariants = {
-    hidden: { opacity: 0, y: 24 },
+  const line = {
+    hidden: { opacity: 0, y: 22 },
     visible: (i: number) => ({
       opacity: 1,
       y: 0,
-      transition: { duration: 0.65, delay: i * 0.1, ease: revealEase },
+      transition: { duration: 0.7, delay: 0.08 + i * 0.1, ease: revealEase },
     }),
   };
 
   return (
-    <div className="relative z-[1] mx-auto flex w-full max-w-[1160px] flex-col px-6 pb-6 pt-7">
-      <header className="flex items-center justify-between font-dm-sans">
-        <Link href="/" className="text-2xl font-bold tracking-tight text-ink">
-          Zealed
-        </Link>
-        <nav aria-label="Primary" className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4">
-          <LaunchAppLink href={VAULTS_PATH} className="inline-flex items-center gap-1.5 text-ink">
-            <AppIcon icon={AccountBalanceIcon} size={16} />
-            Vaults
-          </LaunchAppLink>
-          <AnchorLink href="#how-it-works" className="text-ink">
-            How it works
-          </AnchorLink>
-          <AnchorLink href="#faq" className="text-ink">
-            FAQ
-          </AnchorLink>
-          <span className="text-ink/55" aria-hidden="true">
-            |
-          </span>
-          <LaunchAppLink className="rounded bg-mint px-[1.15rem] py-[0.55rem] font-medium text-void">
-            Launch App
-          </LaunchAppLink>
-        </nav>
-      </header>
-
+    <section className="relative flex min-h-svh flex-col overflow-hidden">
       <motion.div
-        className="mx-auto mt-6 flex max-w-[40rem] flex-col items-center py-8 text-center max-[760px]:py-6"
-        initial={reduceMotion ? false : "hidden"}
-        animate="visible"
+        className="absolute inset-0 z-0"
+        initial={reduceMotion ? false : { scale: 1.06, opacity: 0.85 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 1.4, ease: revealEase }}
       >
-        <motion.h1
-          custom={0}
-          variants={headlineVariants}
-          className="font-dm-sans text-[clamp(2.6rem,6.5vw,4.6rem)] font-medium leading-[1.08] tracking-tight text-ink"
+        <Image
+          src={bannerBg}
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover object-center"
+        />
+      </motion.div>
+
+      {/* Readability veil — keeps type legible on the hot left of the plate */}
+      <div
+        className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-r from-void/55 via-void/20 to-transparent"
+        aria-hidden="true"
+      />
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-[42%] bg-gradient-to-t from-void/85 via-void/40 to-transparent"
+        aria-hidden="true"
+      />
+
+      <div className="relative z-10 mx-auto flex w-full max-w-[1160px] flex-1 flex-col px-6 pt-7 pb-8">
+        <header className="flex items-center justify-between font-dm-sans">
+          <Link
+            href="/"
+            className="text-2xl font-bold tracking-tight text-ink drop-shadow-sm"
+          >
+            Zealed
+          </Link>
+          <nav
+            aria-label="Primary"
+            className="flex items-center gap-[1.4rem] text-[0.85rem] max-[760px]:gap-4"
+          >
+            <LaunchAppLink
+              href={VAULTS_PATH}
+              className="inline-flex items-center gap-1.5 text-ink/90"
+            >
+              <AppIcon icon={AccountBalanceIcon} size={16} />
+              Vaults
+            </LaunchAppLink>
+            <AnchorLink href="#how-it-works" className="text-ink/90">
+              How it works
+            </AnchorLink>
+            <AnchorLink href="#faq" className="text-ink/90">
+              FAQ
+            </AnchorLink>
+            <span className="text-ink/40" aria-hidden="true">
+              |
+            </span>
+            <LaunchAppLink className={btnClass}>Launch App</LaunchAppLink>
+          </nav>
+        </header>
+
+        <motion.div
+          className="flex max-w-[34rem] flex-1 flex-col justify-center py-16 max-[760px]:py-12"
+          initial={reduceMotion ? false : "hidden"}
+          animate="visible"
         >
-          Save. Win{" "}
-          <em className="font-fraunces italic font-normal text-ember">privately</em>.
-        </motion.h1>
-        <motion.p
-          custom={1}
-          variants={headlineVariants}
-          className="mt-5 max-w-[28rem] text-[1.02rem] text-ink/90"
-        >
-          Deposits stay encrypted. Prizes come from a separate sponsor pool.
-        </motion.p>
-        <motion.div custom={2} variants={headlineVariants} className="mt-2 w-full">
-          <LandingStatsBanner />
+          <motion.h1
+            custom={0}
+            variants={line}
+            className="m-0 font-dm-sans text-[clamp(2.6rem,7vw,4.5rem)] font-medium leading-[1.08] tracking-tight text-ink"
+          >
+            Save.
+            <br />
+            Win privately.
+          </motion.h1>
+          <motion.p
+            custom={1}
+            variants={line}
+            className="mt-4 max-w-[26rem] text-[1.05rem] leading-snug text-ink/80"
+          >
+            Deposits stay encrypted. Prizes come from a separate sponsor pool.
+          </motion.p>
+          <motion.div custom={2} variants={line} className="mt-8">
+            <LaunchAppLink className={`${btnClass} px-6 py-3 text-[0.95rem]`}>
+              Launch App
+            </LaunchAppLink>
+          </motion.div>
         </motion.div>
-      </motion.div>
 
-      <motion.div
-        className="mb-8 mt-2"
-        initial={reduceMotion ? false : { opacity: 0, y: 20 }}
-        animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
-        transition={{ duration: 0.65, delay: 0.28, ease: revealEase }}
-      >
-        <AsciiPoolField />
-      </motion.div>
-    </div>
+        <LandingPrizeLedger />
+      </div>
+    </section>
   );
 }

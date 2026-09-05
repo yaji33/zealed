@@ -116,7 +116,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center rounded-md py-2 pl-2 pr-8 text-sm text-ink outline-none",
+      "relative flex w-full cursor-pointer select-none items-center gap-2 rounded-md py-2 pl-2 pr-8 text-sm text-ink outline-none",
       "focus:bg-mint/15 focus:text-ink data-[state=checked]:bg-mint/10",
       "data-[disabled]:pointer-events-none data-[disabled]:opacity-45",
       className,
@@ -128,10 +128,12 @@ const SelectItem = React.forwardRef<
         <Check className="h-4 w-4 text-mint" />
       </SelectPrimitive.ItemIndicator>
     </span>
-    <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    {children}
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
+
+const SelectItemText = SelectPrimitive.ItemText;
 
 const SelectSeparator = React.forwardRef<
   React.ComponentRef<typeof SelectPrimitive.Separator>,
@@ -153,6 +155,7 @@ export {
   SelectContent,
   SelectLabel,
   SelectItem,
+  SelectItemText,
   SelectSeparator,
   SelectScrollUpButton,
   SelectScrollDownButton,

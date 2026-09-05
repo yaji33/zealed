@@ -29,9 +29,9 @@ import {
 } from "@/lib/uiClasses";
 import { FAUCET_PATH, prizeVaultName, vaultWorkspacePath } from "@/lib/vaultPath";
 import {
-  wrapperAccentFor,
   wrapperSymbolFor,
 } from "@/lib/wrapperMeta";
+import { TokenIcon } from "@/components/TokenIcon";
 
 export function VaultsDirectory() {
   const router = useRouter();
@@ -231,14 +231,11 @@ export function VaultsDirectory() {
                     >
                       <td>
                         <div className="flex items-center gap-3">
-                          <span
-                            className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[0.7rem] font-semibold text-void"
-                            style={{
-                              background: wrapperAccentFor(row.system.asset),
-                            }}
-                          >
-                            {row.system.label.slice(0, 2)}
-                          </span>
+                          <TokenIcon
+                            asset={row.system.asset}
+                            label={row.system.label}
+                            size={36}
+                          />
                           <span className="font-medium text-ink">
                             <Link
                               href={vaultWorkspacePath(row.system.slug)}

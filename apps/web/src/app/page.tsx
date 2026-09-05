@@ -1,7 +1,6 @@
-import Image from "next/image";
-import heroBg from "@/assets/hero-bg.png";
 import { HowItWorksSection } from "@/components/HowItWorksSection";
 import { LandingHero } from "@/components/LandingHero";
+import { LandingPrivacyPillars } from "@/components/LandingPrivacyPillars";
 import { LaunchAppLink } from "@/components/LaunchAppLink";
 import { AnchorLink } from "@/components/motion/AnchorLink";
 import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
@@ -69,20 +68,10 @@ const sectionClass =
 export default function HomePage() {
   return (
     <div className="min-h-screen bg-void font-inter leading-relaxed text-ink [&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0 [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
-      <section className="relative flex min-h-svh overflow-hidden">
-        <Image
-          src={heroBg}
-          alt=""
-          fill
-          priority
-          className="z-0 object-cover object-center"
-        />
-        <LandingHero />
-      </section>
-
+      <LandingHero />
       <HowItWorksSection />
-
       <VisibleVsSealedSection />
+      <LandingPrivacyPillars />
 
       <ScrollRevealSection id="contracts" className={sectionClass}>
         <h2>The contracts</h2>
@@ -94,13 +83,9 @@ export default function HomePage() {
           {CONTRACTS.map((contract) => (
             <StaggerItem
               key={contract.name}
-              className="relative flex flex-col gap-3 overflow-hidden rounded-lg bg-gradient-to-b from-[#1a1a1a] to-[#0f0f0f] p-6 shadow-[0_12px_40px_rgba(0,0,0,0.45)]"
+              className="relative flex flex-col gap-3 overflow-hidden rounded-lg border border-edge bg-surface p-6"
             >
-              <div
-                className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-white/[0.06] to-transparent"
-                aria-hidden="true"
-              />
-              <h3 className="relative font-mono text-base font-medium">
+              <h3 className="relative font-mono text-base font-medium text-ink">
                 {contract.name}
               </h3>
               <p className="relative m-0 flex-1 text-[0.92rem] leading-relaxed text-muted">
@@ -158,6 +143,7 @@ export default function HomePage() {
           >
             <AnchorLink href="#how-it-works">How it works</AnchorLink>
             <AnchorLink href="#visible-vs-sealed">Visible vs sealed</AnchorLink>
+            <AnchorLink href="#privacy">Privacy</AnchorLink>
             <AnchorLink href="#contracts">The contracts</AnchorLink>
             <AnchorLink href="#faq">FAQ</AnchorLink>
             <LaunchAppLink>Launch app</LaunchAppLink>

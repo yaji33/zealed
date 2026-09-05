@@ -1,9 +1,10 @@
 "use client";
 
+import LockIcon from "@mui/icons-material/Lock";
 import VisibilityIcon from "@mui/icons-material/Visibility";
-import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { AppIcon } from "@/components/AppIcon";
 import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
+import { cardClass } from "@/lib/uiClasses";
 
 const ROWS = [
   {
@@ -24,19 +25,39 @@ const ROWS = [
   },
 ] as const;
 
-function CellMarker({ kind }: { kind: "public" | "sealed" }) {
-  if (kind === "public") {
-    return (
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-public/20 text-public">
-        <AppIcon icon={VisibilityIcon} size={16} />
-      </span>
-    );
-  }
-
+function RowList({
+  kind,
+  items,
+}: {
+  kind: "public" | "sealed";
+  items: readonly string[];
+}) {
+  const isPublic = kind === "public";
   return (
-    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ember/20 text-ember">
-      <AppIcon icon={VisibilityOffIcon} size={16} />
-    </span>
+    <ul className="m-0 list-none p-0">
+      {items.map((label, index) => (
+        <li
+          key={label}
+          className={`flex items-start gap-3 py-4 ${
+            index > 0 ? "border-t border-line/40" : ""
+          }`}
+        >
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
+              isPublic ? "bg-mint/15 text-mint" : "bg-ember/20 text-ember"
+            }`}
+          >
+            <AppIcon
+              icon={isPublic ? VisibilityIcon : LockIcon}
+              size={16}
+            />
+          </span>
+          <span className="pt-0.5 text-[0.92rem] leading-snug text-ink/90">
+            {label}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -53,42 +74,30 @@ export function VisibleVsSealedSection() {
         The pool is auditable. Your position is not.
       </p>
 
-      <div className="overflow-hidden rounded-2xl">
-        <div className="grid grid-cols-1 md:grid-cols-2">
-          <header className="bg-public/[0.1] px-6 py-5 md:px-8 md:py-6">
-            <p className="m-0 font-mono text-[0.68rem] font-medium tracking-[0.18em] text-public">
-              PUBLIC
-            </p>
-            <h3 className="mt-2 mb-0 font-fraunces text-[1.25rem] font-medium leading-snug text-ink">
-              Visible to everyone
-            </h3>
-          </header>
-          <header className="bg-ember/[0.1] px-6 py-5 md:px-8 md:py-6">
-            <p className="m-0 font-mono text-[0.68rem] font-medium tracking-[0.18em] text-ember">
-              SEALED
-            </p>
-            <h3 className="mt-2 mb-0 font-fraunces text-[1.25rem] font-medium leading-snug text-ink">
-              Sealed to you
-            </h3>
-          </header>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+        <div className={`${cardClass} mb-0`}>
+          <p className="m-0 font-mono text-[0.68rem] font-medium tracking-[0.18em] text-mint">
+            PUBLIC
+          </p>
+          <h3 className="mt-2 mb-4 font-dm-sans text-[1.2rem] font-medium leading-snug text-ink">
+            Visible to everyone
+          </h3>
+          <RowList kind="public" items={ROWS.map((r) => r.public)} />
         </div>
-
-        {ROWS.map((row) => (
-          <div
-            key={row.public}
-            className="grid grid-cols-1 border-t border-line md:grid-cols-2"
-          >
-            <div className="flex items-start gap-3 bg-public/[0.05] px-6 py-4 md:px-8 md:py-5">
-              <CellMarker kind="public" />
-              <span className="text-[0.92rem] leading-snug text-ink/90">{row.public}</span>
-            </div>
-            <div className="flex items-start gap-3 bg-ember/[0.05] px-6 py-4 md:px-8 md:py-5">
-              <CellMarker kind="sealed" />
-              <span className="text-[0.92rem] leading-snug text-ink/90">{row.sealed}</span>
-            </div>
-          </div>
-        ))}
+        <div className={`${cardClass} mb-0`}>
+          <p className="m-0 font-mono text-[0.68rem] font-medium tracking-[0.18em] text-ember">
+            SEALED
+          </p>
+          <h3 className="mt-2 mb-4 font-dm-sans text-[1.2rem] font-medium leading-snug text-ink">
+            Sealed to you
+          </h3>
+          <RowList kind="sealed" items={ROWS.map((r) => r.sealed)} />
+        </div>
       </div>
+
+      <p className="mt-6 text-center font-mono text-[0.72rem] tracking-[0.14em] text-muted">
+        Auditable pool. Private position.
+      </p>
     </ScrollRevealSection>
   );
 }

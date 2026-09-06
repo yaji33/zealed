@@ -1,6 +1,6 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
-import bannerBg from "@/assets/banner-bg.png";
+import bannerBg from "@/assets/banner-bg.webp";
 
 export function HeroBanner({
   icon,
@@ -43,7 +43,7 @@ export function HeroBanner({
             ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-3">
+        <div className="flex w-full shrink-0 flex-wrap items-center gap-3 sm:w-auto">
           {cta}
           {visual}
         </div>

@@ -5,6 +5,7 @@ import { useAccount, useSwitchChain } from "wagmi";
 import { sepolia } from "wagmi/chains";
 import { bannerWarnClass, btnClass } from "@/lib/uiClasses";
 import { noticeFromWalletError } from "@/lib/walletError";
+import { StatusNotice } from "@/components/StatusNotice";
 
 export function NetworkGuard({ children }: { children: ReactNode }) {
   const { chainId, isConnected } = useAccount();
@@ -26,7 +27,9 @@ export function NetworkGuard({ children }: { children: ReactNode }) {
         {isPending ? "Switching…" : "Switch network"}
       </button>
       {error ? (
-        <p className="mb-0 mt-3">{noticeFromWalletError(error, "Could not switch network.").text}</p>
+        <StatusNotice kind="err">
+          {noticeFromWalletError(error, "Could not switch network.").text}
+        </StatusNotice>
       ) : null}
     </section>
   );

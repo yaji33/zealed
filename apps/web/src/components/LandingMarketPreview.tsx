@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
+import { EmptyState } from "@/components/EmptyState";
 import { TokenIcon } from "@/components/TokenIcon";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useVaultMarketData } from "@/hooks/useVaultMarketData";
@@ -47,7 +48,17 @@ export function LandingPrizeLedger() {
           "lg:grid-cols-6",
         ].join(" ")}
       >
-        {(isLoading && preview.length === 0
+        {!isLoading && preview.length === 0 ? (
+          <li className="col-span-full px-0 py-6">
+            <EmptyState
+              eyebrow="PRIZES"
+              title="No prizes building yet"
+              body="Curated vaults appear here once the registry lists them."
+              className="mb-0 border-0 bg-transparent py-4"
+            />
+          </li>
+        ) : (
+        (isLoading && preview.length === 0
           ? Array.from({ length: 6 }, (_, i) => ({ kind: "skel" as const, i }))
           : preview.map((row) => ({ kind: "row" as const, row }))
         ).map((item, index) => {
@@ -103,7 +114,8 @@ export function LandingPrizeLedger() {
               </Link>
             </motion.li>
           );
-        })}
+        })
+        )}
       </ul>
     </div>
   );

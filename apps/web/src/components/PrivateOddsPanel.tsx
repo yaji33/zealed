@@ -9,9 +9,9 @@ import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { usePrizePoolData } from "@/hooks/usePrizePoolData";
 import { drawManagerAbi } from "@/lib/abi/zealed";
 import { useFhevm } from "@/lib/fhe";
+import { StatusNotice } from "@/components/StatusNotice";
 import {
   bannerClass,
-  bannerWarnClass,
   btnSecondaryClass,
 } from "@/lib/uiClasses";
 import { noticeFromWalletError } from "@/lib/walletError";
@@ -120,7 +120,11 @@ export function PrivateOddsPanel({ drawId }: { drawId: bigint }) {
         ) : null}
       </div>
       {weight !== null && totalScore > 0n ? (
-        <ul className="mb-0 mt-4 grid list-none gap-2 p-0 sm:grid-cols-3">
+        <>
+          <StatusNotice kind="ok">
+            Odds decrypted locally for this wallet session.
+          </StatusNotice>
+          <ul className="mb-0 mt-4 grid list-none gap-2 p-0 sm:grid-cols-3">
           {pool.data?.tiers.map((tier) => {
             const tierChance =
               calculateTierChance(weight, totalScore, tier.slots) ?? 0;
@@ -138,8 +142,11 @@ export function PrivateOddsPanel({ drawId }: { drawId: bigint }) {
             );
           })}
         </ul>
+        </>
       ) : null}
-      {error ? <p className={bannerWarnClass}>{error}</p> : null}
+      {error ? (
+        <StatusNotice kind="err">{error}</StatusNotice>
+      ) : null}
     </section>
   );
 }

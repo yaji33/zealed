@@ -23,6 +23,7 @@ vi.mock("@/hooks/useConnectWallet", () => ({
     connectWallet: vi.fn(),
     canConnect: true,
     isPending: false,
+    error: null,
   }),
 }));
 
@@ -85,8 +86,8 @@ describe("VaultsDirectory", () => {
     expect(screen.queryByRole("columnheader", { name: /pool size|saved/i })).not.toBeInTheDocument();
     expect(screen.getAllByText("Prize cUSDC").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Prize cUSDT").length).toBeGreaterThan(0);
-    expect(screen.getByText("cUSDCMock")).toBeVisible();
-    expect(screen.getByText("cUSDTMock")).toBeVisible();
+    expect(screen.getAllByText("cUSDCMock").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("cUSDTMock").length).toBeGreaterThan(0);
     expect(screen.queryByText("START HERE")).not.toBeInTheDocument();
 
     const usdtLinks = screen.getAllByRole("link", { name: "Prize cUSDT" });
@@ -100,5 +101,16 @@ describe("VaultsDirectory", () => {
     render(<VaultsDirectory />);
     expect(screen.getByRole("columnheader", { name: "You" })).toBeVisible();
     expect(screen.getAllByText("••••").length).toBeGreaterThan(0);
+  });
+
+  it("shows an empty state when search matches no vaults", async () => {
+    const user = userEvent.setup();
+    render(<VaultsDirectory />);
+    await user.type(screen.getByRole("textbox", { name: /search vaults/i }), "no-such-vault");
+    expect(
+      screen.getByRole("heading", { name: /no vaults match that search/i }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /clear search/i }));
+    expect(screen.getAllByText("Prize cUSDC").length).toBeGreaterThan(0);
   });
 });

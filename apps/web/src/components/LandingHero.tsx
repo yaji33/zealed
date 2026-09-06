@@ -6,8 +6,9 @@ import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 import CloseIcon from "@mui/icons-material/Close";
 import MenuIcon from "@mui/icons-material/Menu";
-import bannerBg from "@/assets/banner-bg.png";
+import bannerBg from "@/assets/banner-bg.webp";
 import { AppIcon } from "@/components/AppIcon";
+import { BrandMark } from "@/components/BrandMark";
 import { LandingPrizeLedger } from "@/components/LandingMarketPreview";
 import { AnchorLink } from "@/components/motion/AnchorLink";
 import { LaunchAppLink } from "@/components/LaunchAppLink";
@@ -78,13 +79,14 @@ export function LandingHero() {
         aria-hidden="true"
       />
 
-      <div className="relative z-10 mx-auto flex w-full max-w-[1160px] flex-1 flex-col px-6 pt-7 pb-8">
-        <header className="relative z-20 flex items-center justify-between font-dm-sans">
+      <div className="relative z-10 mx-auto flex w-full max-w-[1160px] flex-1 flex-col px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-8 sm:px-6 sm:pt-7">
+        <header className="relative z-20 flex items-center justify-between gap-3 font-dm-sans">
           <Link
             href="/"
-            className="text-2xl font-bold tracking-tight text-ink drop-shadow-sm"
+            className="inline-flex min-h-11 items-center gap-2 text-xl font-bold tracking-tight text-ink drop-shadow-sm sm:text-2xl"
             onClick={closeMenu}
           >
+            <BrandMark size={40} />
             Zealed
           </Link>
 
@@ -116,7 +118,7 @@ export function LandingHero() {
 
           <button
             type="button"
-            className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded text-ink transition-colors hover:text-mint md:hidden"
+            className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded text-ink transition-colors hover:text-mint md:hidden"
             aria-expanded={menuOpen}
             aria-controls={menuId}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
@@ -150,7 +152,7 @@ export function LandingHero() {
                 FAQ
               </AnchorLink>
               <LaunchAppLink
-                className={`${btnClass} mt-auto w-full cursor-pointer py-3.5 transition-[filter] hover:brightness-110`}
+                className={`${btnClass} mt-auto min-h-12 w-full cursor-pointer py-3.5 transition-[filter] hover:brightness-110`}
                 onClick={closeMenu}
               >
                 Launch App
@@ -160,14 +162,14 @@ export function LandingHero() {
         ) : null}
 
         <motion.div
-          className="flex max-w-[34rem] flex-1 flex-col justify-center py-16 max-[760px]:py-12"
+          className="flex max-w-[34rem] flex-1 flex-col justify-center py-12 sm:py-16"
           initial={reduceMotion ? false : "hidden"}
           animate="visible"
         >
           <motion.h1
             custom={0}
             variants={line}
-            className="m-0 font-dm-sans text-[clamp(2.6rem,7vw,4.5rem)] font-medium leading-[1.08] tracking-tight text-ink"
+            className="m-0 font-dm-sans text-[clamp(2.35rem,11vw,4.5rem)] font-medium leading-[1.08] tracking-tight text-ink"
           >
             Save.
             <br />
@@ -182,7 +184,7 @@ export function LandingHero() {
           </motion.p>
           <motion.div custom={2} variants={line} className="mt-8">
             <LaunchAppLink
-              className={`${btnClass} cursor-pointer px-6 py-3 text-[0.95rem] transition-[filter] hover:brightness-110`}
+              className={`${btnClass} min-h-11 w-full cursor-pointer px-6 py-3 text-[0.95rem] transition-[filter] hover:brightness-110 sm:w-auto`}
             >
               Launch App
             </LaunchAppLink>

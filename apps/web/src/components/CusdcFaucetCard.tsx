@@ -13,6 +13,7 @@ import {
   useWriteContract,
 } from "wagmi";
 import { AppIcon } from "@/components/AppIcon";
+import { StatusNotice } from "@/components/StatusNotice";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useWrappedAsset, wrappedAssetQueryKey } from "@/hooks/useWrappedAsset";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
@@ -24,9 +25,6 @@ import {
 } from "@/lib/wrapperMeta";
 import { noticeFromWalletError, type AppNotice } from "@/lib/walletError";
 import {
-  bannerClass,
-  bannerOkClass,
-  bannerWarnClass,
   btnClass,
   btnSecondaryClass,
   cardClass,
@@ -336,9 +334,9 @@ export function CusdcFaucetCard() {
       <p className={`${ledeClass} mt-2`}>Mint, wrap, deposit.</p>
 
       {!configured && (
-        <p className={bannerWarnClass}>
+        <StatusNotice kind="err">
           Select a registered confidential vault with a supported wrapper first.
-        </p>
+        </StatusNotice>
       )}
 
       <ol className="relative mt-8 m-0 list-none p-0">
@@ -467,14 +465,12 @@ export function CusdcFaucetCard() {
           </FaucetStepRow>
       </ol>
 
-      {stepOk && <p className={bannerOkClass}>{stepOk}</p>}
-      {stepNotice && (
-        <p
-          className={stepNotice.kind === "err" ? bannerWarnClass : bannerClass}
-        >
+      {stepOk ? <StatusNotice kind="ok">{stepOk}</StatusNotice> : null}
+      {stepNotice ? (
+        <StatusNotice kind={stepNotice.kind === "err" ? "err" : "cancel"}>
           {stepNotice.text}
-        </p>
-      )}
+        </StatusNotice>
+      ) : null}
     </section>
   );
 }

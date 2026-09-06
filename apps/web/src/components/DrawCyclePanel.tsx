@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { ExplorerTxLink } from "@/components/ExplorerTxLink";
+import { StatusNotice } from "@/components/StatusNotice";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useDrawCycle } from "@/hooks/useDrawCycle";
 import { drawManagerAbi } from "@/lib/abi/zealed";
@@ -11,8 +12,6 @@ import { waitForOkTx } from "@/lib/waitForTx";
 import { noticeFromWalletError } from "@/lib/walletError";
 import {
   bannerClass,
-  bannerOkClass,
-  bannerWarnClass,
   btnSecondaryClass,
   ledeClass,
   monoClass,
@@ -132,17 +131,17 @@ export function DrawCyclePanel() {
         </p>
       ) : null}
       {status.kind !== "idle" ? (
-        <p
-          className={
+        <StatusNotice
+          kind={
             status.kind === "ok"
-              ? bannerOkClass
+              ? "ok"
               : status.kind === "cancel"
-                ? bannerClass
-                : bannerWarnClass
+                ? "cancel"
+                : "err"
           }
         >
           {status.text}
-        </p>
+        </StatusNotice>
       ) : null}
       <div className="mt-3">
         <ExplorerTxLink hash={txHash} />

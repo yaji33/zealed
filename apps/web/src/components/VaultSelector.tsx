@@ -11,8 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { StatusNotice } from "@/components/StatusNotice";
 import { TokenIcon } from "@/components/TokenIcon";
-import { bannerWarnClass } from "@/lib/uiClasses";
 import {
   FAUCET_PATH,
   isVaultWorkspacePath,
@@ -33,19 +33,21 @@ export function VaultSelector() {
   const activeSystems = systems.filter((system) => system.active);
 
   if (isLoading && registryConfigured) {
-    return <p className={bannerWarnClass}>Loading confidential vaults…</p>;
+    return <StatusNotice kind="info">Loading confidential vaults…</StatusNotice>;
   }
   if (isError && registryConfigured) {
     return (
-      <p className={bannerWarnClass}>
+      <StatusNotice kind="err">
         Vault discovery is temporarily unavailable. Direct legacy withdrawal
         remains available through the recorded legacy deployment.
-      </p>
+      </StatusNotice>
     );
   }
   if (!selected) {
     return (
-      <p className={bannerWarnClass}>No active confidential vault is configured.</p>
+      <StatusNotice kind="err">
+        No active confidential vault is configured.
+      </StatusNotice>
     );
   }
 
@@ -63,7 +65,7 @@ export function VaultSelector() {
 
   return (
     <section
-      className="flex items-center justify-between gap-3 rounded-lg border border-edge bg-panel px-4 py-3"
+      className="flex flex-col items-stretch gap-3 rounded-lg border border-edge bg-panel px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
       aria-label="Prize vault selection"
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -79,7 +81,7 @@ export function VaultSelector() {
           <p className="mt-0.5 truncate text-sm text-muted">Each vault is isolated.</p>
         </div>
       </div>
-      <div className="flex min-w-44 flex-col gap-1.5">
+      <div className="flex w-full flex-col gap-1.5 sm:w-auto sm:min-w-44">
         <p id="vault-select-label" className="m-0 text-xs text-muted">
           Save with
         </p>
@@ -89,7 +91,7 @@ export function VaultSelector() {
           disabled={activeSystems.length < 2}
         >
           <SelectTrigger
-            className="w-44"
+            className="w-full sm:w-44"
             aria-labelledby="vault-select-label"
           >
             <SelectValue placeholder="Select vault" />

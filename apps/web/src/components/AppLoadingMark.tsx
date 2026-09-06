@@ -1,3 +1,5 @@
+import { BrandMark } from "@/components/BrandMark";
+
 type AppLoadingMarkProps = {
   label?: string;
   fill?: "screen" | "host";
@@ -16,7 +18,8 @@ export function AppLoadingMark({
       aria-live="polite"
       aria-label={label}
     >
-      <p className="m-0 text-[1.65rem] font-bold tracking-tight text-ink">
+      <p className="m-0 inline-flex items-center gap-2.5 text-[1.65rem] font-bold tracking-tight text-ink">
+        <BrandMark size={48} />
         Zealed
       </p>
 

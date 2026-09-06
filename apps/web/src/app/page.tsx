@@ -1,4 +1,6 @@
+import type { Metadata } from "next";
 import { HowItWorksSection } from "@/components/HowItWorksSection";
+import { JsonLd } from "@/components/JsonLd";
 import { LandingHero } from "@/components/LandingHero";
 import { LandingPrivacyPillars } from "@/components/LandingPrivacyPillars";
 import { LaunchAppLink } from "@/components/LaunchAppLink";
@@ -7,6 +9,10 @@ import { ScrollRevealSection } from "@/components/motion/ScrollRevealSection";
 import { StaggerGrid, StaggerItem } from "@/components/motion/StaggerGrid";
 import { VisibleVsSealedSection } from "@/components/VisibleVsSealedSection";
 import { addresses } from "@/lib/config";
+import { LANDING_FAQ } from "@/lib/landingContent";
+import { landingJsonLd, routeMetadata } from "@/lib/seo";
+
+export const metadata: Metadata = routeMetadata("home");
 
 const CONTRACTS = [
   {
@@ -31,33 +37,6 @@ const CONTRACTS = [
   },
 ] as const;
 
-const FAQ = [
-  {
-    q: "Can I lose my deposit?",
-    a: "No. Principal stays in ConfidentialVault and is withdrawable at any time. Prizes are paid only from PrizePool sponsor-funded mock yield.",
-  },
-  {
-    q: "If balances are encrypted, how can the draw be fair?",
-    a: "Each prize slot stores onchain FHE.randEuint64() randomness. Your client compares it to your encrypted range. Fairness does not require publishing your balance.",
-  },
-  {
-    q: "Can anyone tell whether I won?",
-    a: "No. A losing check and a winning check look the same onchain. Only you decrypt the result.",
-  },
-  {
-    q: "What can the public actually see?",
-    a: "Aggregates only: principal TVL, available prize liquidity, reserve, tier allocations, draw lifecycle, and snapshot versions.",
-  },
-  {
-    q: "What asset does the pool hold?",
-    a: "Curated ERC-7984 vaults, one asset each. The Sepolia faucet mints the selected vault's official mock underlying.",
-  },
-  {
-    q: "Is this live?",
-    a: "Yes. The verified Sepolia registry lists independent confidential wrapper vaults with isolated principal, draws, and prize liquidity.",
-  },
-] as const;
-
 function shortAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
@@ -68,61 +47,65 @@ const sectionClass =
 export default function HomePage() {
   return (
     <div className="min-h-screen bg-void font-inter leading-relaxed text-ink [&_h1]:m-0 [&_h2]:m-0 [&_h3]:m-0 [&_h1]:font-medium [&_h2]:font-medium [&_h3]:font-medium">
-      <LandingHero />
-      <HowItWorksSection />
-      <VisibleVsSealedSection />
-      <LandingPrivacyPillars />
+      <JsonLd data={landingJsonLd()} />
+      <main id="main">
+        <LandingHero />
+        <HowItWorksSection />
+        <VisibleVsSealedSection />
+        <LandingPrivacyPillars />
 
-      <ScrollRevealSection id="contracts" className={sectionClass}>
-        <h2>The contracts</h2>
-        <p className="-mt-7 mb-10 max-w-[44rem] text-muted">
-          One principal vault and a separate prize pool on Zama fhEVM. Values stay
-          encrypted onchain. You decrypt your own result locally.
-        </p>
-        <StaggerGrid className="grid grid-cols-2 gap-5 max-[760px]:grid-cols-1 xl:grid-cols-4">
-          {CONTRACTS.map((contract) => (
-            <StaggerItem
-              key={contract.name}
-              className="relative flex flex-col gap-3 overflow-hidden rounded-lg border border-edge bg-surface p-6"
-            >
-              <h3 className="relative font-mono text-base font-medium text-ink">
-                {contract.name}
-              </h3>
-              <p className="relative m-0 flex-1 text-[0.92rem] leading-relaxed text-muted">
-                {contract.body}
-              </p>
-              {contract.address ? (
-                <a
-                  className="relative font-mono text-[0.82rem] text-ember hover:underline hover:underline-offset-[3px]"
-                  href={`https://sepolia.etherscan.io/address/${contract.address}#code`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {shortAddress(contract.address)}
-                </a>
-              ) : (
-                <span className="relative font-mono text-[0.82rem] text-ember">
-                  not configured
-                </span>
-              )}
-            </StaggerItem>
-          ))}
-        </StaggerGrid>
-      </ScrollRevealSection>
+        <ScrollRevealSection id="contracts" className={sectionClass}>
+          <h2>The contracts</h2>
+          <p className="-mt-7 mb-10 max-w-[44rem] text-muted">
+            One principal vault and a separate prize pool on Zama fhEVM. Values stay
+            encrypted onchain. You decrypt your own result locally.
+          </p>
+          <StaggerGrid className="grid grid-cols-2 gap-5 max-[760px]:grid-cols-1 xl:grid-cols-4">
+            {CONTRACTS.map((contract) => (
+              <StaggerItem
+                key={contract.name}
+                className="relative flex flex-col gap-3 overflow-hidden rounded-lg border border-edge bg-surface p-6"
+              >
+                <h3 className="relative font-mono text-base font-medium text-ink">
+                  {contract.name}
+                </h3>
+                <p className="relative m-0 flex-1 text-[0.92rem] leading-relaxed text-muted">
+                  {contract.body}
+                </p>
+                {contract.address ? (
+                  <a
+                    className="relative font-mono text-[0.82rem] text-ember hover:underline hover:underline-offset-[3px]"
+                    href={`https://sepolia.etherscan.io/address/${contract.address}#code`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {shortAddress(contract.address)}
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </a>
+                ) : (
+                  <span className="relative font-mono text-[0.82rem] text-ember">
+                    not configured
+                  </span>
+                )}
+              </StaggerItem>
+            ))}
+          </StaggerGrid>
+        </ScrollRevealSection>
 
-      <ScrollRevealSection id="faq" className={sectionClass}>
-        <h2>FAQ</h2>
-        <div className="w-full [&_details:last-child]:border-b [&_details]:border-t [&_details]:border-line">
-          {FAQ.map((item) => (
-            <details key={item.q} className="group">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-[1.15rem] font-dm-sans text-[1.02rem] font-medium [&::-webkit-details-marker]:hidden after:font-mono after:text-ember after:content-['+'] after:transition-transform group-open:after:rotate-45">
-                {item.q}
-              </summary>
-              <p className="mb-5 max-w-[52rem] text-muted">{item.a}</p>
-            </details>
-          ))}
-        </div>
-      </ScrollRevealSection>
+        <ScrollRevealSection id="faq" className={sectionClass}>
+          <h2>FAQ</h2>
+          <div className="w-full [&_details:last-child]:border-b [&_details]:border-t [&_details]:border-line">
+            {LANDING_FAQ.map((item) => (
+              <details key={item.q} className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-[1.15rem] font-dm-sans text-[1.02rem] font-medium [&::-webkit-details-marker]:hidden after:font-mono after:text-ember after:content-['+'] after:transition-transform group-open:after:rotate-45">
+                  {item.q}
+                </summary>
+                <p className="mb-5 max-w-[52rem] text-muted">{item.a}</p>
+              </details>
+            ))}
+          </div>
+        </ScrollRevealSection>
+      </main>
 
       <ScrollRevealSection
         as="footer"

@@ -31,10 +31,8 @@ import {
 } from "@/lib/wrapperMeta";
 import { waitForOkTx } from "@/lib/waitForTx";
 import { noticeFromWalletError } from "@/lib/walletError";
+import { StatusNotice } from "@/components/StatusNotice";
 import {
-  bannerClass,
-  bannerOkClass,
-  bannerWarnClass,
   btnClass,
   btnSecondaryClass,
   fieldClass,
@@ -220,12 +218,6 @@ export function PrivatePositionCard() {
   }
 
   const configured = Boolean(selected);
-  const noticeClass =
-    notice.kind === "ok"
-      ? bannerOkClass
-      : notice.kind === "cancel"
-        ? bannerClass
-        : bannerWarnClass;
 
   return (
     <section aria-labelledby="position-title">
@@ -346,7 +338,17 @@ export function PrivatePositionCard() {
           </>
         )}
         {notice.kind !== "idle" ? (
-          <p className={noticeClass}>{notice.text}</p>
+          <StatusNotice
+            kind={
+              notice.kind === "ok"
+                ? "ok"
+                : notice.kind === "cancel"
+                  ? "cancel"
+                  : "err"
+            }
+          >
+            {notice.text}
+          </StatusNotice>
         ) : null}
         <div className="mt-3">
           <ExplorerTxLink hash={txHash} />

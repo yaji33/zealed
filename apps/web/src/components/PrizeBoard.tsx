@@ -23,10 +23,10 @@ import { DRAW_CHECK_GAS, DRAW_CLAIM_GAS } from "@/lib/draw";
 import { useFhevm } from "@/lib/fhe";
 import { formatUnits } from "@/lib/format";
 import { waitForOkTx } from "@/lib/waitForTx";
+import { StatusNotice } from "@/components/StatusNotice";
 import { noticeFromWalletError } from "@/lib/walletError";
 import {
   bannerClass,
-  bannerOkClass,
   bannerWarnClass,
   btnClass,
   btnSecondaryClass,
@@ -247,12 +247,6 @@ function PrizeSlotCard({
     });
   }
 
-  const noticeClass =
-    notice.kind === "ok"
-      ? bannerOkClass
-      : notice.kind === "cancel"
-        ? bannerClass
-        : bannerWarnClass;
   return (
     <article className="rounded-lg border border-edge bg-base p-4">
       <p className="m-0 font-mono text-[0.68rem] tracking-[0.15em] text-muted">
@@ -301,7 +295,18 @@ function PrizeSlotCard({
         </button>
       ) : null}
       {notice.kind !== "idle" ? (
-        <p className={`${noticeClass} text-xs`}>{notice.text}</p>
+        <StatusNotice
+          className="text-xs"
+          kind={
+            notice.kind === "ok"
+              ? "ok"
+              : notice.kind === "cancel"
+                ? "cancel"
+                : "err"
+          }
+        >
+          {notice.text}
+        </StatusNotice>
       ) : null}
       <div className="mt-3">
         <ExplorerTxLink hash={txHash} />

@@ -2,6 +2,7 @@
 
 import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
 import { AppIcon } from "@/components/AppIcon";
+import { StatusNotice } from "@/components/StatusNotice";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
 import { btnClass, cardClass } from "@/lib/uiClasses";
 import { noticeFromWalletError } from "@/lib/walletError";
@@ -32,9 +33,9 @@ export function WalletGate() {
           {isPending || !ready ? "Connecting…" : "Connect wallet"}
         </button>
         {error && (
-          <p className="m-0 max-w-[28rem] text-[0.88rem] text-danger">
+          <StatusNotice kind="err" className="max-w-[28rem] text-center">
             {noticeFromWalletError(error, "Wallet connection failed.").text}
-          </p>
+          </StatusNotice>
         )}
       </div>
     </section>

@@ -4,13 +4,14 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect } from "react";
 import { useAccount } from "wagmi";
+import { EmptyState } from "@/components/EmptyState";
 import { WalletGate } from "@/components/WalletGate";
 import { NetworkGuard } from "@/components/NetworkGuard";
 import { PublicPoolOverview } from "@/components/PublicPoolOverview";
 import { VaultSelector } from "@/components/VaultSelector";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useConnectWallet } from "@/hooks/useConnectWallet";
-import { bannerWarnClass, btnSecondaryClass, cardClass } from "@/lib/uiClasses";
+import { btnSecondaryClass, cardClass } from "@/lib/uiClasses";
 import { VAULTS_PATH } from "@/lib/vaultPath";
 
 function AppPanel({ message }: { message: string }) {
@@ -59,12 +60,16 @@ export function DashboardApp({ slug }: { slug: string }) {
 
   if (!isLoading && systems.length > 0 && !match) {
     return (
-      <section className={cardClass}>
-        <p className={bannerWarnClass}>That vault is not in the live registry.</p>
-        <Link className={`${btnSecondaryClass} mt-4`} href={VAULTS_PATH}>
-          Back to vaults
-        </Link>
-      </section>
+      <EmptyState
+        eyebrow="VAULT"
+        title="That vault is not in the live registry."
+        body="It may have been removed from discovery. Principal withdrawal still works on the recorded contracts."
+        action={
+          <Link className={btnSecondaryClass} href={VAULTS_PATH}>
+            Back to vaults
+          </Link>
+        }
+      />
     );
   }
 

@@ -1,25 +1,26 @@
-"use client";
+import type { Metadata } from "next";
+import { DashboardShell } from "@/components/DashboardShell";
+import { ROUTES, SITE_NAME } from "@/lib/seo";
 
-import dynamic from "next/dynamic";
-import { useEffect, type ReactNode } from "react";
-import { endAppTransition } from "@/lib/appTransition";
-import { prefetchDashboardChunks } from "@/lib/prefetchApp";
+export const metadata: Metadata = {
+  title: {
+    default: ROUTES.vaults.title,
+    template: `%s · ${SITE_NAME}`,
+  },
+  description: ROUTES.vaults.description,
+  alternates: { canonical: ROUTES.vaults.path },
+  openGraph: {
+    title: ROUTES.vaults.title,
+    description: ROUTES.vaults.description,
+    url: ROUTES.vaults.path,
+  },
+};
 
-const SiteHeader = dynamic(
-  () => import("@/components/SiteHeader").then((m) => ({ default: m.SiteHeader })),
-  { ssr: false },
-);
-
-export default function DashboardLayout({ children }: { children: ReactNode }) {
-  useEffect(() => {
-    endAppTransition();
-    prefetchDashboardChunks();
-  }, []);
-
-  return (
-    <div className="min-h-svh bg-base font-dm-sans text-ink">
-      <SiteHeader />
-      <main className="mx-auto w-full max-w-[1160px] px-4 pb-16 pt-8">{children}</main>
-    </div>
-  );
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return <DashboardShell>{children}</DashboardShell>;
 }
+

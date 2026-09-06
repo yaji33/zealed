@@ -38,6 +38,7 @@ export function Providers({
   if (!isClient) {
     return (
       <QueryClientProvider client={queryClient}>
+        {/* No wallet on the server. Reconnect only after mount. */}
         <WagmiProvider config={config} reconnectOnMount={false}>
           <VaultDirectoryProvider>{children}</VaultDirectoryProvider>
         </WagmiProvider>
@@ -48,7 +49,7 @@ export function Providers({
   return (
     <PrivyProvider appId={appId} clientId={clientId} config={privyConfig}>
       <QueryClientProvider client={queryClient}>
-        <PrivyWagmiProvider config={config} reconnectOnMount={false}>
+        <PrivyWagmiProvider config={config} reconnectOnMount>
           <VaultDirectoryProvider>
             <AppLoadingOverlay />
             {children}

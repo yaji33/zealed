@@ -63,7 +63,7 @@ There is no server, owner, or keeper path that decrypts another user’s state.
 
 Prizes are **not** accrued vault yield. A sponsor mints and wraps the vault’s official mock asset, then `contribute`s it into that vault’s `PrizePool`. `ConfidentialVault` principal is a separate custody domain and cannot be allocated as a prize.
 
-Fund script: `pnpm --filter @zealed/contracts prizes:fund:sepolia` (set `VAULT_ID` and `PRIZE_FUNDING_UNITS`). Official mocks use 6 confidential decimals, so `100000000` is 100 tokens. `prepareLiquidity` reverts while a draw is active (`ActiveDraw`); fund only when `activeDrawId == 0`. Details: [`docs/economics.md`](docs/economics.md) and [`docs/operations.md`](docs/operations.md).
+Fund script: `pnpm --filter @zealed/contracts prizes:fund:sepolia` (set `VAULT_ID` and `PRIZE_FUNDING_UNITS`). Official mocks use 6 confidential decimals, so `20000000` is 20 tokens. The next award spends the entire synchronized pot — do not pass a 10,000-token lump if you want a two-week runway. `prepareLiquidity` reverts while a draw is active (`ActiveDraw`); fund only when `activeDrawId == 0`. The keeper drips a per-draw budget after each rollover. Details: [`docs/economics.md`](docs/economics.md) and [`docs/operations.md`](docs/operations.md).
 
 ---
 
@@ -319,9 +319,9 @@ pnpm keeper
 ```
 
 ```powershell
-# Fund one vault only when PrizePool.activeDrawId is 0
+# Fund one idle vault with a per-draw budget (20 tokens). The next award spends the whole pot.
 $env:VAULT_ID="cusdc"
-$env:PRIZE_FUNDING_UNITS="100000000"
+$env:PRIZE_FUNDING_UNITS="20000000"
 pnpm --filter @zealed/contracts prizes:fund:sepolia
 ```
 

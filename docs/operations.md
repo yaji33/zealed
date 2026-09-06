@@ -36,29 +36,40 @@ If a closed draw's verified aggregate score is zero, `cancelEmptyDraw` safely re
 
 ## Sponsor funding and ActiveDraw
 
-Sponsor funding is a separate explicit operation: `prizes:fund:sepolia` mints and wraps each selected
-mock asset, grants its pool operator permission, contributes `PRIZE_FUNDING_UNITS`, and synchronizes
-the aggregate.
+`allocateDraw` spends **all** synchronized available prize liquidity on the next award. Live tier
+shares are immutable (5000 / 3000 / 1500 + 500 reserve). A 10,000-token contribution becomes one
+Grand of about 5,000, not two weeks of prizes.
 
-`PrizePool.prepareLiquidity` reverts with `ActiveDraw` while a draw is open. Fund only when
-`activeDrawId == 0` (after the keeper logs finalized rollover, before the next `closeDraw`). Always
-set `VAULT_ID` so an 18-decimal unit size is never applied to a six-decimal vault. Official mocks use
-6 confidential decimals; `PRIZE_FUNDING_UNITS=100000000` is 100 tokens.
+The keeper therefore drips a **per-draw budget** whenever `activeDrawId == 0` and the pot is below
+that budget. Defaults (6 confidential decimals): 20 tokens for the mock stables and ZAMA / XAUt /
+BRON, and 0.02 for cWETH. Override with `PRIZE_DRAW_BUDGET_UNITS` only — a leftover
+`PRIZE_FUNDING_UNITS` lump must not refill every draw.
+
+`prizes:fund:sepolia` is the manual path. It refuses to mint while a draw is open
+(`prepareLiquidity` reverts `ActiveDraw`) and refuses lumps above 100 tokens unless
+`FORCE_PRIZE_LUMP=1`. Fund only when `activeDrawId == 0` (after the keeper logs finalized rollover,
+before the next `closeDraw`). Always set `VAULT_ID`. Official mocks use 6 confidential decimals;
+`PRIZE_FUNDING_UNITS=20000000` is 20 tokens.
 
 ```bash
-VAULT_ID=cusdc PRIZE_FUNDING_UNITS=100000000 pnpm --filter @zealed/contracts prizes:fund:sepolia
+VAULT_ID=cusdc PRIZE_FUNDING_UNITS=20000000 pnpm --filter @zealed/contracts prizes:fund:sepolia
 ```
 
 PowerShell:
 
 ```powershell
 $env:VAULT_ID="cusdc"
-$env:PRIZE_FUNDING_UNITS="100000000"
+$env:PRIZE_FUNDING_UNITS="20000000"
 pnpm --filter @zealed/contracts prizes:fund:sepolia
 ```
 
-Pre-fund cUSDC and cUSDT (and any other vault judges will open) before the judging window so award
-does not run against zero available prize liquidity.
+A 20-minute close interval plus a 20-minute claim window is about 504 draws in 14 days. At 20 tokens
+per draw that is about 10,080 tokens if every award is fully claimed. Keep `pnpm keeper` running so
+the drip can refill after each rollover.
+
+Contribute can succeed while a draw is active; only `prepareLiquidity` / `finalizeLiquidity` revert.
+Those tokens sit in the pool and become the next award after reconciliation. Do not re-run a 10,000
+token fund during Claiming.
 
 ## Judging-window checklist
 

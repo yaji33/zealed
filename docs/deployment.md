@@ -50,12 +50,14 @@ VAULT_ID=cweth pnpm --filter @zealed/contracts prizes:fund:sepolia
 ```
 
 `PRIZE_FUNDING_UNITS` is confidential `euint64` units. Official Sepolia mocks report 6 confidential
-decimals, so the default `100000000` is 100 tokens for every live vault. Do not pass
+decimals. The default is a **per-draw** budget (20 tokens for the mock stables / ZAMA / XAUt / BRON,
+0.02 for cWETH) because `allocateDraw` spends the entire synchronized pot. Do not pass
 `100 * 10^18` for `cWETH`/`cZAMA`: their underlyings are 18 decimals at rate `1e12`, and that size
 exceeds the official 1M-token mint limit. Funding mints the official public mock underlying, wraps
 it into the matching ERC-7984 asset, contributes it to that vault's `PrizePool`, and synchronizes
 public aggregate prize liquidity. The faucet and deposit defaults are `100` on six-decimal
-underlyings and `0.01` when the underlying has more than 6 decimals.
+underlyings and `0.01` when the underlying has more than 6 decimals. The keeper drips the same
+per-draw budget after each idle rollover.
 
 ## Sepolia deployment
 

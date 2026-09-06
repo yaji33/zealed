@@ -11,7 +11,7 @@ Before allocation, the pool publicly decrypts its own aggregate ERC-7984 balance
 - Community: four slots;
 - Reserve: retained prize liquidity.
 
-Integer division dust is assigned to reserve. Each slot in a tier receives the same public aggregate allocation. Individual checks and payouts remain encrypted.
+Integer division dust is assigned to reserve. Each slot in a tier receives the same public aggregate allocation. Individual checks and payouts remain encrypted. Live Sepolia shares are immutable, so smaller prizes are a smaller pot — typically 20 confidential tokens per draw (Grand 10 / Standard 3 / Community 0.75) rather than a lump that empties on the first award.
 
 After the claim deadline, the pool publicly decrypts its own aggregate balance again. Paid prizes have left that balance; unclaimed allocations remain. Reconciliation preserves the reserve up to the actual balance and rolls the remainder into future available liquidity.
 

@@ -1,6 +1,8 @@
 import { ethers } from "hardhat";
 import { nextKeeperAction } from "./lib/keeperAction";
+import { drawBudgetForVault, formatConfidentialTokens } from "./lib/prizeFunding";
 import { registeredVaultSystems } from "./lib/registrySystems";
+import { mintWrapAndContribute, synchronizePrizeLiquidity } from "./lib/sponsorPrizeLiquidity";
 
 const RPC =
   process.env.SEPOLIA_RPC_URL ??
@@ -55,6 +57,44 @@ async function configuredStacks(): Promise<Stack[]> {
   return systems;
 }
 
+async function topUpDrawBudget(
+  stack: Stack,
+  prizePool: {
+    activeDrawId(): Promise<bigint>;
+    availableLiquidity(): Promise<bigint>;
+    prepareLiquidity(overrides?: { gasLimit: bigint }): Promise<{ wait(): Promise<unknown> }>;
+    liquidityBalanceHandle(): Promise<string | Uint8Array>;
+    finalizeLiquidity(
+      clearBalance: bigint,
+      proof: string,
+      overrides?: { gasLimit: bigint },
+    ): Promise<{ wait(): Promise<unknown> }>;
+  },
+  instance: RelayerInstance,
+): Promise<void> {
+  const budget = drawBudgetForVault(stack.id);
+  const available = await prizePool.availableLiquidity();
+  if (available >= budget) return;
+
+  await (await prizePool.prepareLiquidity({ gasLimit: 500_000n })).wait();
+  const prepared = await publicDecrypt(instance, toHex(await prizePool.liquidityBalanceHandle()));
+  if (prepared.clear >= budget) {
+    await (await prizePool.finalizeLiquidity(prepared.clear, prepared.proof, { gasLimit: 500_000n })).wait();
+    if (prepared.clear > budget * 2n) {
+      console.log(
+        `[${stack.id}] synchronized ${formatConfidentialTokens(prepared.clear)} units; ` +
+          `the next award spends that entire pot (per-draw budget is ${formatConfidentialTokens(budget)})`,
+      );
+    }
+    return;
+  }
+
+  const gap = budget - prepared.clear;
+  console.log(`[${stack.id}] dripping ${formatConfidentialTokens(gap)} prize units for the next award`);
+  await mintWrapAndContribute(stack, gap);
+  await synchronizePrizeLiquidity(stack.prizePool, instance);
+}
+
 async function tickStack(stack: Stack, instance: RelayerInstance): Promise<void> {
   const [signer] = await ethers.getSigners();
   const draw = await ethers.getContractAt("DrawManager", stack.drawManager, signer);
@@ -92,6 +132,10 @@ async function tickStack(stack: Stack, instance: RelayerInstance): Promise<void>
     reconciliationPrepared: state.reconciliationPrepared,
     reconciled: state.reconciled,
   });
+
+  if ((await prizePool.activeDrawId()) === 0n && (action === "wait" || action === "close" || action === "award")) {
+    await topUpDrawBudget(stack, prizePool, instance);
+  }
 
   if (action === "close") {
     if ((await tickets.nextIndex()) <= 1n) {

@@ -2,6 +2,68 @@
 
 Confidential prize savings on [Zama](https://www.zama.org/) fhEVM: a privacy-preserving take on the [PoolTogether](https://pooltogether.com/) no-loss prize model.
 
+---
+
+## Live demo
+
+| Field | Value |
+| --- | --- |
+| **Public app** | https://zealed.xyz/ (see [How to run locally](#how-to-run-locally)). |
+| Network | Ethereum Sepolia (`11155111`) |
+| Registry | [`0x1163FfD290CB470cC5eCCb267b20697C377b7C6a`](https://sepolia.etherscan.io/address/0x1163FfD290CB470cC5eCCb267b20697C377b7C6a) |
+| Curated vaults | cUSDC, cUSDT, cWETH, cZAMA, cXAUt, cBRON |
+| Faucet | `/dashboard/faucet` (mint official mock underlying, approve, wrap to ERC-7984) |
+| Draw cadence | Demo intervals: **20 minutes** to close, **20 minutes** to claim |
+| Source | https://github.com/yaji33/zealed |
+
+Deployment records: [`docs/deployment.md`](docs/deployment.md). Keeper and sponsor-funding runbook: [`docs/operations.md`](docs/operations.md).
+
+Need Sepolia ETH for gas (public faucets). Need mock tokens from the in-app faucet, not from prize liquidity.
+
+---
+
+## Judge walkthrough
+
+Connect a fresh wallet on Sepolia, then complete one full cycle. Amounts stay encrypted; decrypt only in the browser.
+
+1. **Faucet.** Open `/dashboard/faucet`, pick a vault (cUSDC or cUSDT is the simplest path), mint the official mock underlying, approve the wrapper, wrap to ERC-7984.
+2. **Approve the vault.** On `/dashboard/{slug}`, grant the vault ERC-7984 operator permission (`setOperator`).
+3. **Deposit.** Enter an amount. The client encrypts with `@zama-fhe/relayer-sdk` and calls `ConfidentialVault.deposit`. Principal stays withdrawable after this step.
+4. **Wait for a draw.** A keeper closes after `MIN_DRAW_INTERVAL` (20 minutes), then awards. Award stores onchain `FHE.randEuint64()` per slot. You can also close when the UI shows the interval ended; award still needs the keeper (aggregate public-decrypt proof).
+5. **Check.** On the prize board, check one `(tier, slot)`. The contract writes an encrypted prize or encrypted zero. A loss does not revert.
+6. **Decrypt.** Sign the EIP-712 user-decrypt authorization. The relayer returns ciphertext the wallet can open locally. Nobody else can decrypt your result.
+7. **Claim.** If the decrypted value is nonzero, claim. `PrizePool` pays from sponsor-funded mock yield via `confidentialTransfer`.
+8. **Withdraw.** Withdraw any time, including during an open, closed, awarded, or claiming draw. Principal never funds prizes.
+
+Frontend FHE integration lives in [`apps/web/src/lib/fhe.ts`](apps/web/src/lib/fhe.ts) (`@zama-fhe/relayer-sdk`: encrypt inputs and EIP-712 user decrypt).
+
+---
+
+## Confidentiality design
+
+Encrypted by default: deposit and withdrawal amounts, balances, Fenwick weights and ranges, slot randomness, eligibility, outcomes, and prize transfers.
+
+Public by design: vault addresses, draw lifecycle, snapshot version, tier definitions, bounded slot counts, and aggregate prize accounting. Principal TVL is an aggregate that is public only after authorized public decryption.
+
+| Surface | What observers learn | What stays sealed |
+| --- | --- | --- |
+| Deposit / withdraw txs | That an address moved funds, and when | Amount, new balance, weight |
+| Check txs | That an address checked a slot | Win / loss (encrypted zero on loss, no revert) |
+| Claim txs | Participation timing and which public slot | Confidential transfer value |
+| Events | Action names, ids, addresses | No plaintext user amounts |
+| `prizePerSlot` | Public per-slot budget for that draw | Whether you received it |
+
+Intentional leakage and the random-domain bias note: [`docs/privacy.md`](docs/privacy.md).
+
+There is no server, owner, or keeper path that decrypts another user’s state.
+
+---
+
+## Mock yield
+
+Prizes are **not** accrued vault yield. A sponsor mints and wraps the vault’s official mock asset, then `contribute`s it into that vault’s `PrizePool`. `ConfidentialVault` principal is a separate custody domain and cannot be allocated as a prize.
+
+Fund script: `pnpm --filter @zealed/contracts prizes:fund:sepolia` (set `VAULT_ID` and `PRIZE_FUNDING_UNITS`). Official mocks use 6 confidential decimals, so `100000000` is 100 tokens. `prepareLiquidity` reverts while a draw is active (`ActiveDraw`); fund only when `activeDrawId == 0`. Details: [`docs/economics.md`](docs/economics.md) and [`docs/operations.md`](docs/operations.md).
 
 ---
 
@@ -121,7 +183,7 @@ Never combine these into an ambiguous “pool size.”
 
 ## Tests
 
-Verified locally: **33** contract tests and **24** web unit tests passing.
+Verified locally: **33** contract tests and **26** web unit tests passing.
 
 ### Contracts (`pnpm --filter @zealed/contracts test`)
 
@@ -184,6 +246,8 @@ Verified locally: **33** contract tests and **24** web unit tests passing.
 - maps wallet rejection to quiet copy
 - does not expose verbose library metadata
 - maps insufficient gas without exposing raw RPC text
+- maps token underbalance separately from Sepolia ETH gas
+- maps missing ERC-20 allowance and ERC-7984 operator permission
 
 **wrapperMeta**
 - decodes curated vault ids into lowercase slugs
@@ -248,7 +312,20 @@ pnpm --filter @zealed/contracts compile
 pnpm --filter @zealed/contracts test
 ```
 
-Sepolia ops (funded deployer): see [`docs/deployment.md`](docs/deployment.md) for `vault:add:sepolia`, `prizes:fund:sepolia`, and `pnpm keeper`.
+Sepolia ops (funded deployer). Draw close / award / reconcile are automated by the keeper. Demo cadence is 20 minutes per interval.
+
+```bash
+pnpm keeper
+```
+
+```powershell
+# Fund one vault only when PrizePool.activeDrawId is 0
+$env:VAULT_ID="cusdc"
+$env:PRIZE_FUNDING_UNITS="100000000"
+pnpm --filter @zealed/contracts prizes:fund:sepolia
+```
+
+See [`docs/deployment.md`](docs/deployment.md) for `vault:add:sepolia` and [`docs/operations.md`](docs/operations.md) for the keeper one-pager and the ActiveDraw funding window.
 
 ### Web app
 

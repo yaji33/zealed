@@ -166,14 +166,19 @@ export function useVaultTvlHistory() {
 
       points.sort((a, b) => (a.blockNumber < b.blockNumber ? -1 : 1));
 
-      const ends = [points[0], points[points.length - 1]].filter(
-        (p): p is VaultTvlPoint => Boolean(p),
-      );
-      const uniqueEnds = [
-        ...new Map(ends.map((p) => [p.blockNumber.toString(), p])).values(),
-      ];
+      const firstEvent = eventBlocks[0];
+      if (
+        firstEvent !== undefined &&
+        (points.length === 0 || points[0].blockNumber > firstEvent)
+      ) {
+        points.unshift({
+          blockNumber: firstEvent,
+          value: 0n,
+        });
+      }
+
       await Promise.all(
-        uniqueEnds.map(async (point) => {
+        points.map(async (point) => {
           try {
             const block = await publicClient.getBlock({
               blockNumber: point.blockNumber,

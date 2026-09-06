@@ -1,7 +1,7 @@
 import type { PublicClient } from "viem";
 
 /** Public RPCs reject `fromBlock: 0` and cap eth_getLogs range. */
-const LOOKBACK_BLOCKS = 120_000n;
+const LOOKBACK_BLOCKS = 400_000n;
 const CHUNK_BLOCKS = 8_000n;
 
 type EventQuery = Parameters<PublicClient["getContractEvents"]>[0];

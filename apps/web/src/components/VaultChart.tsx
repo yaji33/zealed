@@ -29,6 +29,33 @@ function axisLabel(timestamp?: number): string {
   });
 }
 
+const DAY_MS = 86_400_000;
+
+function calendarDayTicks(
+  startSec?: number,
+  endSec?: number,
+  maxTicks = 6,
+): string[] {
+  if (!endSec) return [];
+  if (!startSec || startSec === endSec) return [axisLabel(endSec)];
+
+  const start = new Date(startSec * 1000);
+  const end = new Date(endSec * 1000);
+  const first = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const dayCount = Math.round((last.getTime() - first.getTime()) / DAY_MS) + 1;
+  if (dayCount <= 1) return [axisLabel(endSec)];
+
+  const step = dayCount <= maxTicks ? 1 : Math.ceil(dayCount / maxTicks);
+  const labels: string[] = [];
+  for (let i = 0; i < dayCount; i += step) {
+    labels.push(axisLabel(Math.floor((first.getTime() + i * DAY_MS) / 1000)));
+  }
+  const endLabel = axisLabel(endSec);
+  if (labels[labels.length - 1] !== endLabel) labels.push(endLabel);
+  return labels;
+}
+
 export function VaultChart() {
   const { selected } = useVaultDirectory();
   const configured = Boolean(selected);
@@ -59,10 +86,10 @@ export function VaultChart() {
     (value, point) => (point.value > value ? point.value : value),
     0n,
   );
-  const firstDate = axisLabel(tvlSeries[0]?.timestamp);
-  const lastDate = axisLabel(tvlSeries[tvlSeries.length - 1]?.timestamp);
-  const xLeft = tvlSeries.length > 1 && firstDate !== lastDate ? firstDate : "";
-  const xRight = lastDate || (tvlSeries.length ? "Now" : "");
+  const xTicks = calendarDayTicks(
+    tvlSeries[0]?.timestamp,
+    tvlSeries[tvlSeries.length - 1]?.timestamp,
+  );
 
   function onTabsKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
@@ -141,8 +168,7 @@ export function VaultChart() {
           <>
             <ChartFrame
               yMax={`${formatCompactAmount(max)} ${assetLabel}`}
-              xLeft={xLeft}
-              xRight={xRight}
+              xTicks={xTicks}
             >
               <div aria-hidden="true">
                 <DotMatrixChart points={chartPoints} mode="area" />
@@ -233,13 +259,11 @@ function AccountingValue({
 
 function ChartFrame({
   yMax,
-  xLeft,
-  xRight,
+  xTicks,
   children,
 }: {
   yMax: string;
-  xLeft: string;
-  xRight: string;
+  xTicks: string[];
   children: ReactNode;
 }) {
   return (
@@ -250,10 +274,11 @@ function ChartFrame({
       </div>
       <div className="min-w-0 flex-1">
         {children}
-        {xLeft || xRight ? (
+        {xTicks.length > 0 ? (
           <div className="mt-3 flex justify-between font-mono text-[0.72rem] text-muted">
-            <span>{xLeft}</span>
-            <span>{xRight}</span>
+            {xTicks.map((tick, index) => (
+              <span key={`${tick}-${index}`}>{tick}</span>
+            ))}
           </div>
         ) : null}
       </div>

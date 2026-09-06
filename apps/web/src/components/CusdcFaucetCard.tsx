@@ -17,6 +17,12 @@ import { StatusNotice } from "@/components/StatusNotice";
 import { useVaultDirectory } from "@/components/VaultDirectoryProvider";
 import { useWrappedAsset, wrappedAssetQueryKey } from "@/hooks/useWrappedAsset";
 import { erc7984Abi, underlyingErc20Abi } from "@/lib/abi/zealed";
+import {
+  displayedAllowance,
+  remainingAllowanceAfterWrap,
+  settleLocalAllowance,
+  UNLIMITED_ALLOWANCE,
+} from "@/lib/faucetAllowance";
 import { formatUnits, parseUnits } from "@/lib/format";
 import {
   defaultMintAmount,
@@ -48,7 +54,7 @@ export function CusdcFaucetCard() {
   const [activeStep, setActiveStep] = useState<FaucetStep | null>(null);
   const [stepNotice, setStepNotice] = useState<AppNotice | null>(null);
   const [stepOk, setStepOk] = useState<string | null>(null);
-  const [confirmedAllowance, setConfirmedAllowance] = useState(0n);
+  const [localAllowance, setLocalAllowance] = useState<bigint | null>(null);
   const [confirmedWrapped, setConfirmedWrapped] = useState(0n);
   const pendingApproveAmount = useRef(0n);
   const pendingWrapAmount = useRef(0n);
@@ -153,15 +159,12 @@ export function CusdcFaucetCard() {
     wrappedAmount > confirmedWrapped ? wrappedAmount : confirmedWrapped;
   const hasWrapped = displayWrapped > 0n;
   const wrapOpen = hasUnderlying || activeStep === "wrap";
-  const effectiveAllowance =
-    (allowance ?? 0n) > confirmedAllowance
-      ? (allowance ?? 0n)
-      : confirmedAllowance;
+  const effectiveAllowance = displayedAllowance(allowance, localAllowance);
   const approvedEnough = wrapAmount > 0n && effectiveAllowance >= wrapAmount;
   const minted = hasUnderlying || hasWrapped;
 
   useEffect(() => {
-    setConfirmedAllowance(0n);
+    setLocalAllowance(null);
     setConfirmedWrapped(0n);
     handledTx.current = undefined;
     setStepNotice(null);
@@ -212,16 +215,19 @@ export function CusdcFaucetCard() {
           `Minted ${formatUnits(mintAmount, publicDecimals)} ${underlyingLabel}.`,
         );
       } else if (step === "approve") {
-        await refetchAllowance();
-        setConfirmedAllowance((prev) =>
-          pendingApproveAmount.current > prev
-            ? pendingApproveAmount.current
-            : prev,
-        );
+        const approved = pendingApproveAmount.current;
+        setLocalAllowance(approved);
+        const refreshed = await refetchAllowance();
+        setLocalAllowance(settleLocalAllowance(refreshed.data, approved));
         setStepOk("Wrapper approved.");
       } else if (step === "wrap") {
         const added = pendingWrapAmount.current;
         const divisor = rate && rate > 0n ? rate : 1n;
+        const remaining = remainingAllowanceAfterWrap(
+          localAllowance ?? allowance ?? 0n,
+          added,
+        );
+        setLocalAllowance(remaining);
         setConfirmedWrapped((prev) => prev + added / divisor);
         queryClient.setQueryData(
           wrappedAssetQueryKey(underlying, wrapper, address),
@@ -232,7 +238,8 @@ export function CusdcFaucetCard() {
           `Wrapped to ${confidentialLabel}. Approve the selected vault, then deposit.`,
         );
         void refetchUnderlyingBalance();
-        void refetchAllowance();
+        const refreshed = await refetchAllowance();
+        setLocalAllowance(settleLocalAllowance(refreshed.data, remaining));
         void refetchWrapped();
       }
       setActiveStep(null);
@@ -252,6 +259,8 @@ export function CusdcFaucetCard() {
     rate,
     queryClient,
     refetchUnderlyingBalance,
+    allowance,
+    localAllowance,
     refetchAllowance,
     refetchWrapped,
     reset,
@@ -285,14 +294,7 @@ export function CusdcFaucetCard() {
 
   async function onApprove() {
     if (!underlying || !wrapper) return;
-    const amount =
-      (underlyingBalance ?? 0n) > wrapAmount
-        ? (underlyingBalance ?? 0n)
-        : wrapAmount > 0n
-          ? wrapAmount
-          : mintAmount;
-    if (amount <= 0n) return;
-    pendingApproveAmount.current = amount;
+    pendingApproveAmount.current = UNLIMITED_ALLOWANCE;
     setStepNotice(null);
     setStepOk(null);
     setActiveStep("approve");
@@ -301,7 +303,7 @@ export function CusdcFaucetCard() {
         address: underlying,
         abi: underlyingErc20Abi,
         functionName: "approve",
-        args: [wrapper, amount],
+        args: [wrapper, UNLIMITED_ALLOWANCE],
       });
     } catch (err) {
       setActiveStep(null);
@@ -429,7 +431,10 @@ export function CusdcFaucetCard() {
                   : `Wrap ${underlyingLabel} into ${confidentialLabel}.`}
             </p>
             <p className={`${monoClass} text-[0.85rem]`}>
-              Status: {hasWrapped ? "Wrapped" : "Not wrapped yet"}
+              Status:{" "}
+              {hasWrapped
+                ? `Wrapped so far: ${formatUnits(displayWrapped, confidentialDecimals)} ${confidentialLabel}`
+                : "Not wrapped yet"}
             </p>
             <label className={fieldClass}>
               <span>Amount ({underlyingLabel})</span>
